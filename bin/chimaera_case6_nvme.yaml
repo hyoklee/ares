@@ -1,0 +1,44 @@
+# IOWarp/chimaera runtime config for the MiV-Simulator case-6 I/O comparison —
+# NODE-LOCAL NVMe variant. Identical to chimaera_case6.yaml except the CTE
+# storage tier is a file-backed block device on the compute node's local NVMe
+# (/mnt/nvme) instead of a DRAM tier. The chi_default_bdev below MUST stay RAM:
+# it is the shared-memory allocator the runtime itself uses, not a CTE tier.
+networking:
+  port: 9613
+  neighborhood_size: 32
+  wait_for_restart: 30
+  wait_for_restart_poll_period: 1
+
+runtime:
+  num_threads: 4
+  queue_depth: 1024
+  local_sched: "default"
+  first_busy_wait: 10000
+  learning_rate: 0.2
+
+compose:
+  - mod_name: clio_bdev
+    pool_name: "ram::chi_default_bdev"
+    pool_query: local
+    pool_id: "301.0"
+    bdev_type: ram
+    capacity: "8GB"
+
+  - mod_name: clio_cte_core
+    pool_name: cte_main
+    pool_query: local
+    pool_id: "512.0"
+    storage:
+      # File-backed tier on node-local NVMe. The bdev opens this path with
+      # O_CREAT and truncates it to capacity_limit; the parent dir is created by
+      # run_case6.sbatch (NVME_DIR) before the runtime starts.
+      - path: "/mnt/nvme/hyoklee/cte_case6/cte_tier1"
+        bdev_type: "file"
+        capacity_limit: "8GB"
+        score: 1.0
+    dpe:
+      dpe_type: "max_bw"
+    targets:
+      neighborhood: 1
+      default_target_timeout_ms: 30000
+      poll_period_ms: 5000

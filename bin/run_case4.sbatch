@@ -1,20 +1,27 @@
 #!/bin/bash
-# SLURM run script for MiV-Simulator case 6 (gap junctions) on ares.
+# SLURM run script for MiV-Simulator case 4 (opsin) on ares.
 # Usage:
 #   sbatch --nodes=N --ntasks=T --job-name=... \
-#          --export=ALL,IOWARP=0,TSTOP=500,TAG=base run_case6.sbatch
+#          --export=ALL,IOWARP=0,TSTOP=500,TAG=base run_case4.sbatch
 # Env knobs:
-#   IOWARP=0|1   0 = native HDF5 (baseline); 1 = LD_PRELOAD IOWarp CTE posix adapter
-#   TSTOP        simulation stop time in ms (default 500)
-#   TAG          label used in result/log paths
+#   IOWARP=0|1    0 = native HDF5 (baseline); 1 = LD_PRELOAD IOWarp CTE posix adapter
+#   TSTOP         simulation stop time in ms (default 500)
+#   TAG           label used in result/log paths
+#   CORE_INSTALL  which IOWarp build (default ~/core; ~/core.iowarp/install for upstream)
+#   CHIMA_CONF    runtime config (default RAM tier; *_nvme.yaml for node-local NVMe tier)
+#   NVME_DIR      parent dir for a file-backed NVMe tier (created/cleaned per run)
+#
+# Case 4 (opsin) reuses the same Microcircuit_Small datasets as case 6 (its
+# datasets/ is a symlink to 6-gapjunctions/datasets); the only model difference
+# is that case 4 has no gap junctions. Opsin light stimulation is a TODO in
+# miv_simulator (env.opsin_config is commented out), so run-network runs the
+# base Microcircuit_Small network here.
 #SBATCH --partition=compute
 #SBATCH --exclusive
 #SBATCH --time=02:00:00
-#SBATCH --output=/home/hyoklee/logs/case6_%x_%j.log
-# --exclusive: dedicate the whole node to this job. Without it the compute
-# partition packs multiple 4-task jobs onto one 40-core node, so a baseline and
-# an IOWarp run end up co-resident — sharing CPU and page cache and invalidating
-# the comparison. One job per node keeps each run isolated with a cold cache.
+#SBATCH --output=/home/hyoklee/logs/case4_%x_%j.log
+# --exclusive: one job per node so each run is isolated with a cold page cache
+# (the compute partition otherwise packs multiple 4-task jobs onto a 40-core node).
 
 set -e
 : "${IOWARP:=0}"
@@ -28,7 +35,7 @@ export PATH=/home/hyoklee/neuroh5/build/bin:$PATH
 export MIV_SKIP_MPI_CHECK=1
 export HWLOC_HIDE_ERRORS=1
 
-CASE=/home/hyoklee/MiV-Simulator-Cases/6-gapjunctions
+CASE=/home/hyoklee/MiV-Simulator-Cases/4-opsin
 cd "$CASE"
 # Avoid NEURON auto-loading a stale nrnivmodl x86_64/ build (would double-register
 # mechanisms vs run-network's own compile_and_load).
@@ -37,7 +44,7 @@ RESULTS="results/${TAG}_${SLURM_JOB_ID}"
 mkdir -p "$RESULTS"
 
 NTASKS=${SLURM_NTASKS:-1}
-echo "=== case6 run: nodes=${SLURM_JOB_NUM_NODES} ntasks=${NTASKS} IOWARP=${IOWARP} TSTOP=${TSTOP} TAG=${TAG} ==="
+echo "=== case4 run: nodes=${SLURM_JOB_NUM_NODES} ntasks=${NTASKS} IOWARP=${IOWARP} TSTOP=${TSTOP} TAG=${TAG} ==="
 echo "host=$(hostname) start=$(date +%s.%N)"
 # Capture the wall-clock start BEFORE any LD_PRELOAD is set: under the adapter,
 # command substitutions like $(date) can be contaminated by runtime init output.
@@ -45,24 +52,19 @@ T0=$(date +%s.%N)
 
 # --- IOWarp core (CTE) setup --------------------------------------------------
 # The POSIX adapter (LD_PRELOAD) intercepts file I/O and routes it to the
-# chimaera runtime's RAM tier. The runtime (clio_run) and adapter link the
+# chimaera runtime's storage tier. The runtime (clio_run) and adapter link the
 # iowarp-build conda env; the app links the miv env. Both envs share an
 # identical libstdc++, and the adapter does not link HDF5/MPI, so placing miv
 # first on LD_LIBRARY_PATH keeps the app on its own HDF5/MPI while the adapter
 # still resolves its core+iowarp deps.
-# CORE_INSTALL selects which IOWarp build to use (adapter + clio_run). Default is
-# the hyoklee fork ~/core; override with --export=...,CORE_INSTALL=/home/hyoklee/core.iowarp/install
-# to compare against upstream iowarp/clio-core.
 : "${CORE_INSTALL:=/home/hyoklee/core/install}"
 IOW_ENV=/home/hyoklee/mc3/envs/iowarp-build
 CORE="$CORE_INSTALL/lib/libclio_cte_posix.so"
 [ -f "$CORE" ] || CORE=$(find /home/hyoklee/core/build -name 'libclio_cte_posix.so' 2>/dev/null | head -1)
 NNODES=${SLURM_JOB_NUM_NODES:-1}
-# Single node: use the stock config. Multi node: derive a per-job config that
-# lists the allocated hosts so the per-node daemons form a distributed CTE.
 # CHIMA_CONF knob lets a caller swap the runtime config (e.g. a node-local NVMe
 # tier instead of the default RAM tier).
-: "${CHIMA_CONF:=/home/hyoklee/bin/chimaera_case6.yaml}"
+: "${CHIMA_CONF:=/home/hyoklee/bin/chimaera_case4.yaml}"
 export CLIO_SERVER_CONF="$CHIMA_CONF"
 # NVME_DIR (optional): parent dir for a file-backed CTE tier on node-local NVMe.
 # The file bdev opens its tier path with O_CREAT, so the parent must exist; we
@@ -89,7 +91,7 @@ start_runtime() {
     scontrol show hostnames "$SLURM_JOB_NODELIST" > "$RESULTS/hostfile"
     CHIMA_CONF="$RESULTS/chimaera_job.yaml"
     sed "s#^networking:#networking:\n  hostfile: \"$RESULTS/hostfile\"#" \
-        /home/hyoklee/bin/chimaera_case6.yaml > "$CHIMA_CONF"
+        /home/hyoklee/bin/chimaera_case4.yaml > "$CHIMA_CONF"
     export CLIO_SERVER_CONF="$CHIMA_CONF"
     echo "IOWarp: starting $NNODES-node distributed runtime (hostfile=$RESULTS/hostfile)"
     ( export PATH="$CORE_INSTALL/bin:$IOW_ENV/bin:$PATH"
@@ -100,9 +102,6 @@ start_runtime() {
     CLIO_BG=$!
   fi
   for i in $(seq 1 120); do
-    # Require one "pools created" per node before declaring ready.
-    # grep -c already prints 0 on no match; tr guards against a missing file
-    # yielding empty (which would break the integer test).
     rc=$(grep -ca 'All .* pools created successfully' "$RESULTS/clio_runtime.log" 2>/dev/null)
     rc=${rc:-0}
     if [ "$rc" -ge "$NNODES" ]; then
