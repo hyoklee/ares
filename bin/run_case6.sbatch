@@ -50,7 +50,10 @@ T0=$(date +%s.%N)
 # identical libstdc++, and the adapter does not link HDF5/MPI, so placing miv
 # first on LD_LIBRARY_PATH keeps the app on its own HDF5/MPI while the adapter
 # still resolves its core+iowarp deps.
-CORE_INSTALL=/home/hyoklee/core/install
+# CORE_INSTALL selects which IOWarp build to use (adapter + clio_run). Default is
+# the hyoklee fork ~/core; override with --export=...,CORE_INSTALL=/home/hyoklee/core.iowarp/install
+# to compare against upstream iowarp/clio-core.
+: "${CORE_INSTALL:=/home/hyoklee/core/install}"
 IOW_ENV=/home/hyoklee/mc3/envs/iowarp-build
 CORE="$CORE_INSTALL/lib/libclio_cte_posix.so"
 [ -f "$CORE" ] || CORE=$(find /home/hyoklee/core/build -name 'libclio_cte_posix.so' 2>/dev/null | head -1)
