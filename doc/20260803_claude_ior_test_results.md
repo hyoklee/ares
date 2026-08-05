@@ -5,6 +5,14 @@ Answer to `20260803_claude_ior_test.md`. Run on **ares**, 2026-08-03.
 Branch under test: `origin/886-blob-replicas` @ `a7a0fea3`
 ("docs(config): chain intro reflects async write-through + coherent reads").
 
+> **Update 2026-08-04:** re-tested against `origin/dev` @ `2992817c`, which now
+> carries the #886 chain plus four perf commits written in response to this
+> report. Paired A/B result: **reads ~1.9x faster, writes ~+7%**. See
+> [Re-test after the dev update](#re-test-after-the-dev-update--2026-08-04) at
+> the end — and note that the absolute numbers in the 2026-08-03 tables below are
+> **not** comparable with the 08-04 ones (same build re-measured 2x lower a day
+> later; that is why the re-test is paired inside one allocation).
+
 ## TL;DR
 
 * The full stack **does** run, and the config **does** do something: with
@@ -275,3 +283,98 @@ hostfiles) are under `/mnt/common/hyoklee/clio886/runs/run_<chain>_<N>n_<jobid>/
    the layer's purpose on this workload.
 5. Raise the fd soft limit wherever `clio_cte_fuse` is launched (jarvis's
    `clio_cte_libfuse` pkg included), or bound the FUSE thread pool.
+
+---
+
+# Re-test after the dev update — 2026-08-04
+
+`origin/dev` @ `2992817c` vs the previously tested `886-blob-replicas` @ `a7a0fea3`.
+Same driver, same config templates, same IOR parameters.
+
+## What landed upstream
+
+`origin/dev` (and `main`) now contain the #886 chain plus four perf commits that
+were written in response to this report — `ef3a9d68` cites "the ares IOR findings
+(hyoklee/ares 20260803 doc)" by name:
+
+| commit | what it changes |
+| --- | --- |
+| `ef3a9d68` | writer-local cache copies + probe-free reads (`PoolQuery::Local` hot path) — a put's raw copy used to land at the blob's *hash owner*, so a rank reading its own file always missed locally; every read also paid a size-probe task |
+| `2be09359` | probe-free writer-local puts (`REPLICA_UPDATE_ONLY`, speculative create + owner verification) |
+| `ddf31e36` | net: separate response lane + recycled SHM staging pool (#892) |
+| `2d2d1fd9` | owner-node cache blind spot (dev only, not on the 886 branch) |
+
+`clio_default.yaml` is byte-identical between the two revisions, so the configs
+from the first round were reused unchanged.
+
+## Methodology change: the first comparison was invalid
+
+The obvious approach — run the new build and compare against yesterday's table —
+gives a wrong answer here. Re-running the **identical old build with identical
+parameters** (job 22733, 8n chain) produced **1577 / 1145 MiB/s** against
+**3420 / 2942** the day before (jobs 22674/22680). Nothing about the software
+changed; the node set shifted by one node and the cluster had other tenants.
+
+So all conclusions below come from **A/B phases inside one allocation**: the same
+8 (or 12) nodes run old, new, old, new back-to-back, ~2 minutes apart
+(`runs/run_ab_paired.sh`). Cross-job absolute numbers are not comparable on this
+cluster; ratios measured within a job are.
+
+## Paired results (full chain, 24 ranks/node, 1 MiB xfer, 64 MiB blocks)
+
+8 nodes / 192 ranks — job 22734:
+
+| phase | build | write MiB/s | read MiB/s |
+| --- | --- | --- | --- |
+| r1A | old (`a7a0fea3`) | 1517.65 | 1204.61 |
+| r1B | **dev (`2992817c`)** | 1516.54 | **2327.51** |
+| r2A | old | 1500.83 | 1160.82 |
+| r2B | **dev** | **1733.18** | **2284.80** |
+| | old mean | 1509.2 | 1182.7 |
+| | dev mean | 1624.9 | 2306.2 |
+| | **delta** | **+7.7%** | **+95.0%** |
+
+12 nodes / 288 ranks — job 22736:
+
+| phase | build | write MiB/s | read MiB/s |
+| --- | --- | --- | --- |
+| r1A | old | 2068.14 | 1704.70 |
+| r1B | **dev** | 2017.66 | **3188.12** |
+| r2A | old | 2184.84 | 1797.08 |
+| r2B | **dev** | **2531.58** | **3370.61** |
+| | old mean | 2126.5 | 1750.9 |
+| | dev mean | 2274.6 | 3279.4 |
+| | **delta** | **+7.0%** | **+87.3%** |
+
+A partially-completed earlier 12-node pairing (job 22735) agrees: old 2125/1684
+and 1694/1811, dev 2413/3306.
+
+## Verdict
+
+* **Reads: ~1.9x faster** (+95% at 8 nodes, +87% at 12), consistent across all
+  four paired measurements. This is the writer-local cache copy landing where the
+  reader actually is, which is exactly the defect the first report flagged
+  ("a guaranteed-local cache hit is ~60% slower than bypassing the chain").
+  Upstream measured 90x per-rank for this path on their 4-node docker harness;
+  through FUSE with 24 ranks/node the end-to-end gain is ~2x, so the remaining
+  ceiling is the FUSE/kernel round trip, not the chain.
+* **Writes: ~+7%**, at both scales — real but modest. The bigger upstream write
+  wins (32 -> 76 MB/s/rank) came through `AsyncPutBlobDefer`; the FUSE adapter
+  does not use the defer API, so this workload only picks up the probe removal.
+  Wiring clio-fs writes onto the defer path looks like the next lever.
+* **Scaling 8n -> 12n is unchanged in shape**: dev write 1.40x, read 1.42x vs old
+  1.41x / 1.48x (ideal 1.50x). The perf work did not change how the chain scales;
+  it changed where a read is served from.
+* The absolute numbers in this section are ~2x below the 2026-08-03 table because
+  the cluster was busier. Compare within a table, never across.
+
+### One robustness note
+
+In the first 12-node pairing, the fourth phase's daemons started but compose never
+finished on any node (`0/12` for the full 90 s window) after three prior
+bring-up/tear-down cycles on the same nodes; the daemons were alive and
+scheduling. A 25 s settle between phases made it reproducible-free (job 22736 ran
+4/4). Worth knowing if anything drives repeated runtime restarts on one node set.
+
+Artifacts: `runs/run_{old,dev}_chain_{8,12}n_2273{4,6}_r{1,2}{A,B}/`, driver
+`runs/run_ab_paired.sh`, dev install `/mnt/common/hyoklee/cliodev/install`.
