@@ -1,0 +1,56 @@
+# clio_run compose config for the NetCDF-4/CLIO benchmark on an ares compute
+# node -- node-local NVMe tier variant.
+#
+# Identical to nc4_clio_runtime_ram.yaml except for the single CTE storage
+# entry, which is a file-backed bdev on the compute node's /dev/nvme0n1p1
+# (mounted at /mnt/nvme, ~150 GB free) instead of a DRAM tier. That is the whole
+# experiment: same runtime, same pools, same adapter, different medium under the
+# CTE tier.
+#
+# chi_default_bdev stays RAM on purpose -- it is the runtime's own shared-memory
+# allocator, not a CTE tier, and moving it to a file would measure the runtime's
+# internals rather than the data path.
+#
+# The file bdev opens its path with O_CREAT and sizes it to capacity_limit, so
+# the parent directory must exist before clio_run starts; nc4_clio_run.sbatch
+# creates it (and removes it afterwards, so each job starts from a cold tier).
+networking:
+  port: 9413
+  neighborhood_size: 32
+memory:
+  main_segment_size: 2GB
+  client_data_segment_size: 2GB
+  runtime_data_segment_size: 2GB
+runtime:
+  num_threads: 4
+  queue_depth: 1024
+  local_sched: "default"
+compose:
+  - mod_name: clio_bdev
+    pool_name: "ram::chi_default_bdev"
+    pool_query: local
+    pool_id: "301.0"
+    bdev_type: ram
+    capacity: "4GB"
+  - mod_name: clio_cte_core
+    pool_name: clio_cte_core
+    pool_query: local
+    pool_id: "512.0"
+    storage:
+      - path: "/mnt/nvme/hyoklee/nc4_clio/cte_tier1"
+        bdev_type: "file"
+        capacity_limit: "64GB"
+        score: 1.0
+    dpe:
+      dpe_type: "max_bw"
+    targets:
+      neighborhood: 1
+      default_target_timeout_ms: 30000
+      poll_period_ms: 5000
+  - mod_name: clio_cte_filesystem
+    pool_name: clio_cte_filesystem
+    pool_query: local
+    pool_id: "560.0"
+    next_pool_id: "512.0"
+    targets:
+      neighborhood: 1

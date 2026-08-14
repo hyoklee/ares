@@ -1,0 +1,60 @@
+# clio_run compose config for the NetCDF-4/CLIO benchmark on an ares compute
+# node -- DRAM tier variant (the reference configuration).
+#
+# Derived from hpf's .github/scripts/clio_runtime.yaml, with the capacities
+# raised for real hardware: that file is sized for a GitHub runner's 2 GB
+# --shm-size, while an ares compute node has 46 GB of RAM and a 24 GB /dev/shm.
+# The 512 MB tier there is smaller than a single tst_chunks3 variable at the
+# dimensions used here (512x64x512 floats = 64 MiB, and the scaling sweep
+# doubles that repeatedly), so keeping it would have measured tier eviction
+# rather than the adapter.
+#
+# Everything below the sizes is deliberately identical to the CI config: same
+# pool ids, same CFS -> CTE-core chain (560.0 -> 512.0), same DPE. The NVMe
+# counterpart (nc4_clio_runtime_nvme.yaml) differs ONLY in the CTE storage
+# entry, so a RAM-vs-NVMe delta is attributable to the tier medium.
+networking:
+  port: 9413
+  neighborhood_size: 32
+memory:
+  main_segment_size: 2GB
+  client_data_segment_size: 2GB
+  runtime_data_segment_size: 2GB
+runtime:
+  num_threads: 4
+  queue_depth: 1024
+  local_sched: "default"
+compose:
+  # The shared-memory allocator the runtime itself uses. MUST stay RAM in both
+  # configs -- it is not a CTE tier.
+  - mod_name: clio_bdev
+    pool_name: "ram::chi_default_bdev"
+    pool_query: local
+    pool_id: "301.0"
+    bdev_type: ram
+    capacity: "4GB"
+  - mod_name: clio_cte_core
+    pool_name: clio_cte_core
+    pool_query: local
+    pool_id: "512.0"
+    storage:
+      - path: "ram::cte_ram_tier1"
+        bdev_type: "ram"
+        capacity_limit: "8GB"
+        score: 1.0
+    dpe:
+      dpe_type: "max_bw"
+    targets:
+      neighborhood: 1
+      default_target_timeout_ms: 30000
+      poll_period_ms: 5000
+  # The CLIO VFD does its I/O through the context-filesystem (CFS) chimod, not
+  # through the CTE core pool directly. Without this pool the VFD's first
+  # H5Fcreate blocks forever ("ChiMod 'clio_cte_filesystem' not found").
+  - mod_name: clio_cte_filesystem
+    pool_name: clio_cte_filesystem
+    pool_query: local
+    pool_id: "560.0"
+    next_pool_id: "512.0"
+    targets:
+      neighborhood: 1
