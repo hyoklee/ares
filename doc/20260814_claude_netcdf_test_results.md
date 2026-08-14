@@ -440,8 +440,9 @@ the same variable stored chunked costs the VFD 1.6x rather than 200x.
 ### Fixed
 
 Filed as [iowarp/clio-core#980](https://github.com/iowarp/clio-core/issues/980)
-and implemented on the `vfd-vector-coalescing` branch of the clio-core checkout
-(commit `3210df1a`). The driver now groups consecutive vector elements while
+and fixed in [iowarp/clio-core#981](https://github.com/iowarp/clio-core/pull/981)
+(branch `vfd-vector-coalescing`, commit `0112f0db`, rebased onto `dev`
+`39d748b8`). The driver now groups consecutive vector elements while
 their spanning region stays within a window (`sieve=<bytes>` in the driver
 config, default 65536 to match HDF5's own `H5Pset_sieve_buf_size`; `sieve=0`
 restores the old behaviour) and services each group as one I/O — a gather when
@@ -464,7 +465,9 @@ in a class of its own.
 **Correctness gate:** `tst_chunks3` reads its data back but never compares it,
 so it cannot catch a corrupted write. Files written by sec2, by the original
 driver and by the fixed driver are `h5diff`-identical
-(`bin/nc4_clio_vfdfix_check.sbatch` runs that check before it measures anything).
+(`bin/nc4_clio_vfdfix_check.sbatch` runs that check before it measures anything). clio-core's own
+`clio_cte_vfd_unit_tests` and `clio_cte_vfd_no_runtime_tests`, built from the
+branch, also pass against it (22 checks ok; one skipped for a missing `h5dump`).
 
 ### What would actually pass
 
