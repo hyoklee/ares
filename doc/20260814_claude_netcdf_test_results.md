@@ -335,7 +335,107 @@ So 512³ has **two independent walls**, and they are not the same wall:
 | wall | who hits it | fix |
 | --- | --- | --- |
 | chunk-cache thrash + deflate on eviction | everyone — baseline, VOL, VFD | a chunk cache that fits a slab's working set |
-| per-request overhead on unchunked strided writes | the CLIO VFD only | not the cache; the VFD's request path (or chunk the variable) |
+| per-request overhead on unchunked strided writes | the CLIO VFD only | see below — the VFD opts out of HDF5's sieve buffer |
+
+## Why the VFD fails on unchunked strided writes
+
+Profiling that second wall (jobs 23587–23590; `contiguous write NxNx1`, sampled
+with `WAIT_TIMINGS=6`) gives a one-line answer: **for this access pattern the
+CLIO VFD receives one driver call per 4-byte element, where sec2 receives one
+per 64 KB block.** Same operation, same dimensions (512³), 5-second windows:
+
+| | calls | size of each |
+| --- | ---: | --- |
+| baseline (sec2) | 22,697 `pwrite64` + 22,698 `pread64` | **65,536 B** |
+| CLIO VFD | 19,535 `pwrite64` | **4 B** |
+
+The VFD's offsets are 1024 bytes apart at 256³ and 2048 at 512³ — exactly the
+row stride `N*4`. It is walking the selection element by element.
+
+### Why sec2 gets 64 KB blocks and CLIO gets 4 bytes
+
+Not a CLIO bug in the ordinary sense — it is a consequence of a capability the
+CLIO VFD implements and sec2 does not. HDF5 decides per I/O
+(`H5Dio.c`, `H5D__ioinfo_adjust`):
+
+```c
+/* If selection I/O mode is default (auto), enable it here if the VFD supports
+   it ... otherwise disable it */
+if (io_info->use_select_io == H5D_SELECTION_IO_MODE_DEFAULT) {
+    if (H5F_has_vector_select_io(..., op_type == H5D_IO_OP_WRITE))
+        io_info->use_select_io = H5D_SELECTION_IO_MODE_ON;
+    else
+        io_info->use_select_io = H5D_SELECTION_IO_MODE_OFF;
+}
+```
+
+* `H5FDsec2.c` registers `NULL, /* read_vector */ NULL, /* write_vector */`.
+  Selection I/O is therefore **off**, and the write falls into the classic
+  `H5D__contig_writevv` path — which uses the **data sieve buffer**, coalescing
+  the strided 4-byte elements into 64 KB read-modify-write blocks. That is the
+  65,536 B I/O above.
+* `H5FDclio.cc` registers `H5FD__clio_read_vector` / `H5FD__clio_write_vector`.
+  Selection I/O is therefore **on**, HDF5 hands the driver the raw element
+  vector, and the sieve buffer is bypassed entirely.
+
+The CLIO vector implementation then does not re-coalesce — its own comment says
+so:
+
+> Note the elements are still issued as individual pread/pwrites; coalescing
+> file-contiguous elements into a single preadv/pwritev is a possible future
+> optimization (worthwhile only for patterns with contiguous runs, which HDF5's
+> scattered vector I/O rarely has).
+
+For this selection that assumption is inverted: the elements are *not*
+file-contiguous, but they are densely and regularly spaced, which is exactly
+what a sieve buffer exists to exploit. Advertising `H5FD_FEAT_DATA_SIEVE` (which
+the VFD does) has no effect once selection I/O is on — the flag governs a path
+the library is no longer taking.
+
+### The multiplier
+
+Each element then costs more than a `pwrite`, because `H5FD__clio_do_write`
+writes twice — once to the authoritative file, once into the CTE tier:
+
+```c
+ssize_t put = pwrite(file->posix_fd, src, want, off);      /* what sec2 does */
+...
+if (file->fd >= 0) {
+  if (CLIO_CFS_CLIENT->PwriteFd(file->fd, buf, size, addr) < 0)   /* + IPC */
+```
+
+so every 4-byte element carries a CFS round-trip to the runtime. The syscall mix
+during the operation shows the cost of that round-trip: per 15 s the VFD makes
+56,108 `pwrite64` but **393,016 `getpid` and 361,229 `gettid`** (~13 identity
+syscalls per element written), plus 52,979 `poll` and roughly one `tgkill` per
+write — a thread wake per element.
+
+Putting it together for `contiguous write 512x512x1` (134 M elements):
+
+| | driver calls | per call |
+| --- | ---: | --- |
+| sec2 | ~4.2 M sieve blocks (64 KB, 32 elements each) | one `pwrite`, page cache |
+| CLIO VFD | **134 M** element writes | one `pwrite` **+ one CFS IPC round-trip** |
+
+~32x the calls, each several times more expensive — which is the ~200x measured
+for this operation at 256³ (1200 s vs 6.1 s), and why the VFD alone cannot
+finish it at 512³ in 90 minutes even with the chunk cache fixed.
+
+### What would fix it
+
+* **Coalesce in `H5FD__clio_write_vector`/`read_vector`.** Runs that are
+  file-contiguous merge into one `pwrite`; runs that are merely *close* can be
+  serviced with a sieve-style read-modify-write of the spanning region. This is
+  the optimization the code comment defers, and this workload is the case that
+  makes it worth doing.
+* **Or do not advertise vector I/O** until it coalesces: dropping the two
+  callbacks would put HDF5 back on the sieve path and make this operation behave
+  like sec2 (at the cost of vectored efficiency elsewhere).
+* **Or batch the CTE populate** rather than issuing one `PwriteFd` per element,
+  so the second write does not multiply the first.
+
+Chunked datasets do not hit any of this: a chunk is one large contiguous I/O, so
+the same variable stored chunked costs the VFD 1.6x rather than 200x.
 
 ### What would actually pass
 
@@ -371,6 +471,9 @@ distributing the CLIO runtime is a cost, not a speedup.
 | 23582 / 23583 | 1 | profile of the expensive op, CLIO VOL | same HDF5 stack under `clio_dataset_write`; 2.06 M syscalls/60 s |
 | 23581 | 1 | 512³ baseline, **2 GiB chunk cache** | **18/18 in 202 s** |
 | 23584 | 1 | 512³ CLIO VOL + VFD, 2 GiB chunk cache | VOL **18/18 in 209 s** (1.26x); VFD **6/18**, killed at cap on the unchunked `contiguous write 512x512x1` |
+| 23587, 23588 | 1 | profile of `contiguous write NxNx1`, CLIO VFD | **4-byte** `pwrite64` at the row stride; ~13 `getpid`/`gettid` per write |
+| 23589 | 1 | same op, baseline | **65,536-byte** `pwrite64`/`pread64` — HDF5's sieve buffer |
+| 23590 | 1 | same op, CLIO VFD at matched 512³ dims | 4-byte `pwrite64`, confirming the difference is the driver, not the size |
 
 23578's queued VFD phase was cancelled rather than run: the VOL had just failed
 to finish 5 of 18 timings in 90 minutes and the VFD is 1.5x slower than the VOL
