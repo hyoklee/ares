@@ -280,8 +280,16 @@ and the first thing to fail is **not** CLIO:
 | job | tier | variants | outcome |
 | --- | --- | --- | --- |
 | 23561 / 23562 (sweeps) | DRAM / NVMe | all three | baseline killed at the 20 min cap |
-| 23569 | DRAM | baseline, VOL | **both** killed at a 90 min cap, < 18 timings |
-| 23570 | NVMe | baseline, VOL | **both** killed at a 90 min cap, < 18 timings |
+| 23569 | DRAM | baseline, VOL | **both** killed at a 90 min cap |
+| 23570 | NVMe | baseline, VOL | **both** killed at a 90 min cap |
+
+These runs left *empty* result files, which is a reporting artifact, not a
+measurement: `tst_chunks3`'s stdout is a pipe here and glibc block-buffers it, so
+nothing is written until the process exits. A follow-up with `stdbuf -oL`
+([2026-08-14](20260814_claude_netcdf_test_results.md)) recovered the progress
+trace and shows the single-node baseline completing **5 of the 18 timings** in
+90 minutes, with one of them — `compressed write 1x512x512` — accounting for
+3900 s of that on its own.
 
 Plain netCDF-4 on stock HDF5 needs more than **90 minutes** of wall clock for
 this workload at 512³, against 13.3 s of CPU (and a small multiple of that in
