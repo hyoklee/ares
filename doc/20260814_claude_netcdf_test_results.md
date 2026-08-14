@@ -437,6 +437,35 @@ finish it at 512³ in 90 minutes even with the chunk cache fixed.
 Chunked datasets do not hit any of this: a chunk is one large contiguous I/O, so
 the same variable stored chunked costs the VFD 1.6x rather than 200x.
 
+### Fixed
+
+Filed as [iowarp/clio-core#980](https://github.com/iowarp/clio-core/issues/980)
+and implemented on the `vfd-vector-coalescing` branch of the clio-core checkout
+(commit `3210df1a`). The driver now groups consecutive vector elements while
+their spanning region stays within a window (`sieve=<bytes>` in the driver
+config, default 65536 to match HDF5's own `H5Pset_sieve_buf_size`; `sieve=0`
+restores the old behaviour) and services each group as one I/O — a gather when
+the elements tile the span exactly, a read-modify-write of the span otherwise —
+with one CTE populate per group instead of per element.
+
+Measured on the same node, `tst_chunks3 6 256 64 256 64 256 64`, seconds of CPU
+(job 23594):
+
+| operation | sec2 | VFD before | VFD after | vs before |
+| --- | ---: | ---: | ---: | ---: |
+| `contiguous write 256x256x1` | 6.1 | **1200** | **24** | **50x faster** |
+| `contiguous read 256x256x1` | 3.5 | 39 | 4.3 | 9x faster |
+| all 18 timings | 13.4 | 1245 | 34.5 | 36x faster |
+
+The worst operation goes from 197x the baseline to 3.9x, and the variant as a
+whole from 93x to 2.6x — the VFD is now in the same range as the VOL rather than
+in a class of its own.
+
+**Correctness gate:** `tst_chunks3` reads its data back but never compares it,
+so it cannot catch a corrupted write. Files written by sec2, by the original
+driver and by the fixed driver are `h5diff`-identical
+(`bin/nc4_clio_vfdfix_check.sbatch` runs that check before it measures anything).
+
 ### What would actually pass
 
 Not a cluster change — a chunk-cache or chunk-geometry change on the application
