@@ -42,7 +42,9 @@ zlib `deflate`, reached through
 **651 syscalls in 60 seconds** — pure user-space CPU, no I/O to distribute.
 Giving HDF5 a chunk cache that fits the working set (`argv[8]`, 2 GiB) takes
 that operation from **3900 s to 0.61 s** and the whole 18-timing test to
-**202 s on one node** — and the CLIO VOL passes it too, at its usual 1.26x.
+**202 s on one node** — and the CLIO VOL passes it too, at its usual 1.26x. The
+CLIO VFD still does not: the cache fixes its chunked paths as well, and it then
+stops on the *unchunked* strided write, which no chunk cache can help.
 
 ## Method
 
@@ -305,6 +307,36 @@ That 1.26x is the same flat tax the VOL charged at every smaller size on
 2026-08-13 — the adapter was never the problem at 512³, and once the chunk cache
 stops thrashing it behaves exactly as it does everywhere else.
 
+**The VFD still does not pass, and it fails somewhere else entirely.** Given the
+same 2 GiB cache it was killed at the 90-minute cap after **6 of 18 timings**
+(job 23584) — but the six it did complete took **14 s in total**:
+
+| timing | VFD, 2 GiB cache |
+| --- | ---: |
+| `contiguous write 1x512x512` | 1.3 s |
+| `chunked write 1x512x512` | 0.87 s |
+| `compressed write 1x512x512` | 0.80 s |
+| `contiguous write 512x1x512` | 10 s |
+| `chunked write 512x1x512` | 0.53 s |
+| `compressed write 512x1x512` | 0.60 s |
+| `contiguous write 512x512x1` | **>5385 s, unfinished** |
+
+The chunk cache fixed the chunked and compressed paths for the VFD too — the
+`compressed write 1x512x512` that costs 3900 s at the default cache costs
+**0.80 s** here. What stops it is the *seventh* timing,
+`contiguous write 512x512x1`: the **unchunked** strided write, which has no
+chunks and therefore nothing for a chunk cache to fix. The baseline does it in
+100 s; the VFD burned the remaining 5385 s of its budget on it without
+finishing (>54x and counting), consistent with the 197x measured for the same
+operation at 256³ on 2026-08-13, which predicts ~5.5 hours.
+
+So 512³ has **two independent walls**, and they are not the same wall:
+
+| wall | who hits it | fix |
+| --- | --- | --- |
+| chunk-cache thrash + deflate on eviction | everyone — baseline, VOL, VFD | a chunk cache that fits a slab's working set |
+| per-request overhead on unchunked strided writes | the CLIO VFD only | not the cache; the VFD's request path (or chunk the variable) |
+
 ### What would actually pass
 
 Not a cluster change — a chunk-cache or chunk-geometry change on the application
@@ -338,7 +370,7 @@ distributing the CLIO runtime is a cost, not a speedup.
 | 23580 | 1 | profile of the expensive op, baseline | 5/5 samples in `deflate` under `H5D__chunk_cache_evict`; 651 syscalls/60 s |
 | 23582 / 23583 | 1 | profile of the expensive op, CLIO VOL | same HDF5 stack under `clio_dataset_write`; 2.06 M syscalls/60 s |
 | 23581 | 1 | 512³ baseline, **2 GiB chunk cache** | **18/18 in 202 s** |
-| 23584 | 1 | 512³ CLIO VOL + VFD, 2 GiB chunk cache | VOL **18/18 in 209 s** (1.26x); VFD phase in flight at the time of writing |
+| 23584 | 1 | 512³ CLIO VOL + VFD, 2 GiB chunk cache | VOL **18/18 in 209 s** (1.26x); VFD **6/18**, killed at cap on the unchunked `contiguous write 512x512x1` |
 
 23578's queued VFD phase was cancelled rather than run: the VOL had just failed
 to finish 5 of 18 timings in 90 minutes and the VFD is 1.5x slower than the VOL
