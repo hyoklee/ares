@@ -32,10 +32,23 @@
 
 set -uo pipefail
 
+# Stack is selectable: default is the nc4-clio-work tree the adapters were
+# originally CI-tested against (serial HDF5); STACK=ours points at the forks
+# built in this series (HDF5 2.3.0 PARALLEL + netcdf-c 4.10.2 + clio-core dev),
+# which is the only combination where the VOL links a parallel HDF5.
 W=/mnt/common/hyoklee/nc4-clio-work
-CLIO_BIN=$W/clio-build/bin
-NC_INST=$W/netcdf-install
-H5_INST=$W/hdf5-install
+STACK=${STACK:-cicompat}
+if [ "$STACK" = ours ]; then
+  CLIO_BIN=${CLIO_BIN:-/mnt/common/hyoklee/opt/clio-core/lib}
+  CLIO_RUN_BIN=${CLIO_RUN_BIN:-/mnt/common/hyoklee/opt/clio-core/bin}
+  NC_INST=${NC_INST:-/mnt/common/hyoklee/opt/netcdf-c}
+  H5_INST=${H5_INST:-/mnt/common/hyoklee/opt/hdf5-develop}
+else
+  CLIO_BIN=$W/clio-build/bin
+  CLIO_RUN_BIN=$W/clio-build/bin
+  NC_INST=$W/netcdf-install
+  H5_INST=$W/hdf5-install
+fi
 BIN=/home/hyoklee/src/hyoklee/ares/bin
 
 JOB=${SLURM_JOB_ID}
@@ -55,7 +68,9 @@ mkdir -p "$RUNDIR" "$LOCAL" /home/hyoklee/logs
 echo "=== $(date) job=$JOB node=$(hostname)"
 echo "    hdf5   : $(grep -aoE 'HDF5 Version: [0-9.]+' $H5_INST/lib/libhdf5.so | head -1)  parallel=$(grep -aoE 'Parallel HDF5: [A-Z]+' $H5_INST/lib/libhdf5.so | head -1)"
 echo "    netcdf : $($NC_INST/bin/nc-config --version 2>/dev/null || echo 4.10.2-development)"
+echo "    stack  : $STACK  clio=$CLIO_BIN"
 echo "    plugins: $(ls $CLIO_BIN/libclio_vfd.so $CLIO_BIN/libclio_hdf5_vol.so 2>/dev/null | wc -l)/2 present"
+echo "    vol links: $(ldd $CLIO_BIN/libclio_hdf5_vol.so 2>/dev/null | grep -icE 'libmpi') mpi"
 
 unset LD_LIBRARY_PATH CONDA_PREFIX PYTHONPATH CMAKE_PREFIX_PATH LIBRARY_PATH
 export PATH=/usr/local/bin:/usr/bin:/bin
@@ -81,7 +96,7 @@ clio_start() {
   clio_stop
   cp $W/clio_runtime.yaml "$CLIO_CONF"
   CLIO_SERVER_CONF="$CLIO_CONF" LD_LIBRARY_PATH=$CLIO_BIN \
-    "$CLIO_BIN/clio_run" start > "$CLIO_LOG" 2>&1 &
+    "$CLIO_RUN_BIN/clio_run" start > "$CLIO_LOG" 2>&1 &
   for _ in $(seq 1 60); do
     grep -q "pools created successfully" "$CLIO_LOG" 2>/dev/null && { sleep 1; echo "    clio_run ready"; return 0; }
     grep -q "Could not start TCP server" "$CLIO_LOG" 2>/dev/null && { echo "    FATAL: clio bind failed"; return 1; }

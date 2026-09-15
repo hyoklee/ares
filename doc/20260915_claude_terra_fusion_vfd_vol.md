@@ -1,4 +1,36 @@
-# clio VFD and VOL on Terra Fusion — VFD wins 29% on one chunk size, VOL cannot read the files at all
+# clio VFD and VOL on Terra Fusion — both adapters are neutral; the 29% "win" was a noisy baseline
+
+> **UPDATE, later on 2026-09-15 (jobs 24126/24127) — both original headline
+> findings are RETRACTED.** Re-run against the current forks
+> (`hyoklee/hdf5` `f720275127` + `hyoklee/netcdf-c` `9039e1987` +
+> **`hyoklee/core` `34ce0ab9`**) at 5 reps:
+>
+> | variable | baseline | clio_vfd | clio_vol |
+> | --- | --- | --- | --- |
+> | `modis_ev` (16 × 11 MB) | 115.4 | 116.3 | 114.2 |
+> | `aster_swir` (1 × 32 MB) | 221.4 | 220.2 | 218.7 |
+> | `misr_red` (1 × 755 MB) | 174.5 | 171.9 | 163.9 |
+>
+> 1. **The 29% VFD win does not reproduce — it was a bimodal baseline.** The
+>    original baseline for `aster_swir` ranged **160.9-216.2** (median 169.9)
+>    while the VFD's was tight at 207.5-218.5. On the current stack the baseline
+>    is stable at 221.4 (220.4-222.5) and the VFD matches it at 220.2. The
+>    original VFD figure (218.5) is essentially the *current baseline*: the VFD
+>    was never fast, the baseline sample was slow. The doc flagged this number as
+>    "the single most load-bearing" one; it did not survive.
+> 2. **The VOL reads all three variables successfully.** `nc_inq_varndims:
+>    NetCDF: HDF error` is gone, and so is the teardown hang — **15/15 clean
+>    `nc_close`** for both adapters, zero errors. `core` `34ce0ab9` carries the
+>    fix (`clio_vol_exiting_g`, `clio_vol.cc:370`) for precisely the atexit
+>    ordering bug diagnosed below.
+> 3. **Corrected conclusion: no clio adapter wins on this workload.** All three
+>    paths sit within ~1% on the chunked variables; the VOL costs ~6% on MISR's
+>    755 MB chunk, where adapter overhead has nowhere to hide. That is consistent
+>    with the clio-fs result and has the same cause — zlib inflate caps
+>    throughput far below the point where the data path matters.
+>
+> Everything below this box records the original 09-15 run and is kept for the
+> diagnosis, which remains accurate for the plugin build it describes.
 
 Run on **ares**, 2026-09-15, jobs 23941/23942/23943, node `ares-comp-08`.
 Third in the series after
@@ -10,7 +42,7 @@ adapters were never exercised, so nothing so far said anything about the
 vector-coalescing fix from
 [`20260813_claude_netcdf_test.md`](20260813_claude_netcdf_test.md).
 
-## Headline
+## Headline (as originally measured — see the retraction above)
 
 * **`clio_vfd` is 29% faster than baseline on ASTER** — 218.5 vs 169.9 MiB/s on a
   single 32 MB zlib-1 chunk. This is the **first and only configuration in the
@@ -27,7 +59,7 @@ vector-coalescing fix from
 * **Both adapters are serial-only**, so none of this composes with the parallel
   reads the earlier two studies measured.
 
-## The adapters are serial-only
+## The adapters are serial-only (as built by the CI tree — see the update above)
 
 `libclio_vfd.so` and `libclio_hdf5_vol.so` link **no MPI**, and the HDF5 they are
 built against (`nc4-clio-work/hdf5-install`) reports **`Parallel HDF5: OFF`**.
@@ -148,6 +180,45 @@ cannot be tested with these adapters as built — they are serial. A parallel-HD
 build of the VFD would be needed before the result means anything for E3SM or for
 the 8-rank numbers in the previous two studies.
 
+## What the current forks changed
+
+Re-running against `hyoklee/core` `34ce0ab9` built directly on the HDF5 2.3.0 and
+netcdf-c 4.10.2 forks (rather than the `nc4-clio-work` CI tree) changed three
+things.
+
+**The VOL works.** Every read succeeds. Whatever produced `nc_inq_varndims:
+NetCDF: HDF error` in the older plugin build is not present in `core` `dev`.
+
+**The teardown hang is fixed at source.** `clio_vol.cc:370` documents the atexit
+LIFO ordering problem — the CLIO client is first constructed on the first
+`H5Fopen`, long after `H5open()`, so its static destructors run *before*
+HDF5's `H5_term_library`, and `clio_write_stamp`'s `Wait()` then blocks on a
+future no surviving receive thread can complete. The `clio_vol_exiting_g` guard
+skips the tier once teardown has begun, which is fail-closed: an unwritten
+coherence stamp just makes the next open see `kAbsent` and re-read from the
+authoritative native file.
+
+**The VOL now links a parallel HDF5** (`libhdf5.so.1000` 2.3.0 parallel +
+`libmpi.so.12`), which the CI-tree plugins could not. That removes the hard
+serial-only barrier described above as a *build* property — though it does not by
+itself demonstrate collective I/O support, since a VOL replaces the file API
+wholesale and `H5Pset_fapl_mpio` does not obviously apply beneath it. Parallel
+reads through the VOL remain untested.
+
+Two build hazards worth recording, both of which cost time here:
+
+* **Parallel HDF5 drags MPI into clio-core's build.** `hdf5-config.cmake` does
+  `find_dependency(MPI)`, so a clio-core configure that never needed MPI before
+  fails at `CMakeLists.txt:814` unless MPICH is discoverable.
+* **Conda's HDF5 headers will silently win.** clio's deps (zmq, yaml-cpp,
+  cereal) live in `~/mc3`, so conda's include directory must be on the path —
+  and `~/mc3/include/H5VLnative.h` is **HDF5 1.14**, where
+  `#define H5VL_NATIVE (H5VL_native_register())`. HDF5 2.3.0 defines the same
+  macro as `(H5OPEN H5VL_NATIVE_g)`, a variable. Compiling the VOL against 1.14
+  headers while linking 2.3.0 produces a library that loads and then dies with
+  `undefined symbol: H5VL_native_register`. Pinning `HDF5_ROOT` is not enough;
+  the include order needs forcing with `-I<hdf5>/include`.
+
 ## Caveats
 
 * Single node, single process, 3 reps. `aster_swir` is only 30.5 MiB logical, so
@@ -166,10 +237,12 @@ the 8-rank numbers in the previous two studies.
 | file | what it does |
 | --- | --- |
 | [`bin/tf_serial_read.c`](../bin/tf_serial_read.c) | serial netCDF-4 whole-variable reader; reports **before** `nc_close` so a close-path hang cannot swallow the measurement |
-| [`bin/tf_vfd_vol_run.sbatch`](../bin/tf_vfd_vol_run.sbatch) | all three variants in one allocation; `VARIANTS` and `READ_TIMEOUT` knobs to re-run one phase |
+| [`bin/tf_vfd_vol_run.sbatch`](../bin/tf_vfd_vol_run.sbatch) | all three variants in one allocation; `VARIANTS`, `READ_TIMEOUT`, `REPS` knobs, and `STACK=ours\|cicompat` to select the fork stack or the CI tree |
+| [`bin/tf_build_clio_core.sh`](../bin/tf_build_clio_core.sh) | builds `hyoklee/core` with VOL + VFD against the HDF5 2.3.0 fork, with both hazards above handled |
 
 ```sh
-sbatch bin/tf_vfd_vol_run.sbatch                                   # all three
+sbatch --export=ALL,STACK=ours,REPS=5 bin/tf_vfd_vol_run.sbatch    # current forks
+sbatch bin/tf_vfd_vol_run.sbatch                                   # CI tree, all three
 sbatch --export=ALL,VARIANTS=clio_vol,READ_TIMEOUT=90 bin/tf_vfd_vol_run.sbatch
 ```
 

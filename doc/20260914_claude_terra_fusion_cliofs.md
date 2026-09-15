@@ -128,12 +128,12 @@ vector-coalescing fix from
 
 Followed up in
 [`20260915_claude_terra_fusion_vfd_vol.md`](20260915_claude_terra_fusion_vfd_vol.md):
-the VFD turns out to be **29% faster than baseline on a single 32 MB chunk** —
-the only clio win in the series — but flat on 16-chunk MODIS and 5% *slower* on
-MISR's 755 MB chunk, so the guess that the biggest single read would benefit most
-is wrong. The VOL cannot read these files at all (`nc_inq_varndims` fails with
-`NetCDF: HDF error`). Both adapters are serial-only, so neither composes with the
-parallel reads measured here.
+against the current `hyoklee/core` fork **both adapters are neutral** — within
+~1% of baseline on the chunked variables, ~6% slower on MISR's 755 MB chunk. An
+apparent 29% VFD win measured against the older CI-tree plugins was retracted:
+it was a bimodal baseline, not a clio speedup. The VOL reads correctly once built
+on the current fork, and the older plugins' serial-only limitation is a property
+of that build rather than of the adapter.
 
 ## Caveats
 
