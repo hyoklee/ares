@@ -124,10 +124,16 @@ scorpio-netcdf4p 118.7 at 8 ranks, **+8%** against +26% on NVMe.
 **This exercised clio-fs (FUSE), not the clio VFD or VOL adapters.** The VFD
 vector-coalescing fix from
 [`20260813_claude_netcdf_test.md`](20260813_claude_netcdf_test.md) lives in the
-`clio_vfd` path driven by `nc4_clio_run.sbatch`, which never runs here. Whether
-coalescing helps when HDF5 issues one enormous read — MISR's single 755 MB chunk
-is about as clean a test case as exists — is still open, and would need the
-`clio_vfd`/`clio_vol` variants pointed at these files.
+`clio_vfd` path driven by `nc4_clio_run.sbatch`, which never runs here.
+
+Followed up in
+[`20260915_claude_terra_fusion_vfd_vol.md`](20260915_claude_terra_fusion_vfd_vol.md):
+the VFD turns out to be **29% faster than baseline on a single 32 MB chunk** —
+the only clio win in the series — but flat on 16-chunk MODIS and 5% *slower* on
+MISR's 755 MB chunk, so the guess that the biggest single read would benefit most
+is wrong. The VOL cannot read these files at all (`nc_inq_varndims` fails with
+`NetCDF: HDF error`). Both adapters are serial-only, so neither composes with the
+parallel reads measured here.
 
 ## Caveats
 
