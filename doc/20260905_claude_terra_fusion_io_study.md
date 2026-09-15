@@ -1,7 +1,9 @@
 # Terra Fusion parallel netCDF-4 reads — chunk layout decides everything
 
 Run on **ares**, 2026-09-05. Whole stack built from source: HDF5 `develop`,
-netcdf-c `main`, netcdf-fortran, SCORPIO.
+netcdf-c `main`, netcdf-fortran, SCORPIO. **No clio in the stack** — plain XFS,
+HDF5's `sec2` driver, MPICH ROMIO. Followed up on clio-fs in
+[`20260914_claude_terra_fusion_cliofs.md`](20260914_claude_terra_fusion_cliofs.md).
 
 The question was whether E3SM's I/O layer (SCORPIO) can read the Terra Fusion
 Basic Fusion granules in `/mnt/common/datasets-staging`, and what read
