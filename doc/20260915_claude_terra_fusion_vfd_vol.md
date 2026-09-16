@@ -31,6 +31,12 @@
 >
 > Everything below this box records the original 09-15 run and is kept for the
 > diagnosis, which remains accurate for the plugin build it describes.
+>
+> **Collective I/O through the VOL was then tested** in
+> [`20260916_claude_terra_fusion_vol_collective.md`](20260916_claude_terra_fusion_vol_collective.md):
+> it **works** — `nf90_open_par` and `NF90_COLLECTIVE` both succeed, reads scale
+> to 8 ranks, zero errors — and performs at parity with native. The
+> architectural objection raised below is therefore removed.
 
 Run on **ares**, 2026-09-15, jobs 23941/23942/23943, node `ares-comp-08`.
 Third in the series after
@@ -202,8 +208,9 @@ authoritative native file.
 `libmpi.so.12`), which the CI-tree plugins could not. That removes the hard
 serial-only barrier described above as a *build* property — though it does not by
 itself demonstrate collective I/O support, since a VOL replaces the file API
-wholesale and `H5Pset_fapl_mpio` does not obviously apply beneath it. Parallel
-reads through the VOL remain untested.
+wholesale and `H5Pset_fapl_mpio` does not obviously apply beneath it. **That was
+tested on 09-16 and it does work**, at parity with native — see
+[`20260916`](20260916_claude_terra_fusion_vol_collective.md).
 
 Two build hazards worth recording, both of which cost time here:
 
