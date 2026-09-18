@@ -7,6 +7,14 @@ support and **does real parallel HDF5 reads**. With working measurements, the
 OMNI tuning question can finally be answered — and the answer is that the two
 knobs CLAUDE.md asks about do not currently do anything.
 
+> **SUPERSEDED — WRONG TOOL.** This benchmarks `wrp` from `~/cae/omni`, a
+> **deprecated tree**: clio-core's own CAE has `# add_subdirectory(omni)`
+> commented out, and the live OMNI tool is **`clio_cae`**. See
+> [part 7](20260918_claude_terra_fusion_discrepancy_07_omni_clio_cae.md).
+> The findings below are accurate for `wrp` but do not transfer: the two tools
+> share no schema, URI format or code path, and `clio_cae` has no `max_scale`.
+
+
 ## Headline
 
 * **CAE rebuilt with HDF5.** `wrp` now links HDF5 2.3.0 (parallel), initialises

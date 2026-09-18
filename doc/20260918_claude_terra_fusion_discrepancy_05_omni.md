@@ -3,6 +3,14 @@
 Run on **ares**, 2026-09-18. Stage 5 of the CLAUDE.md task: "adjust parameters
 for OMNI file to maximize hardware utilization such as NVMe and clusters."
 
+> **SUPERSEDED — WRONG TOOL.** This benchmarks `wrp` from `~/cae/omni`, a
+> **deprecated tree**: clio-core's own CAE has `# add_subdirectory(omni)`
+> commented out, and the live OMNI tool is **`clio_cae`**. See
+> [part 7](20260918_claude_terra_fusion_discrepancy_07_omni_clio_cae.md).
+> The findings below are accurate for `wrp` but do not transfer: the two tools
+> share no schema, URI format or code path, and `clio_cae` has no `max_scale`.
+
+
 > **RESOLVED** in
 > [part 6](20260918_claude_terra_fusion_discrepancy_06_omni_rebuilt.md): CAE was
 > rebuilt with `USE_HDF5=ON` and OMNI now does real parallel HDF5 reads. Two
