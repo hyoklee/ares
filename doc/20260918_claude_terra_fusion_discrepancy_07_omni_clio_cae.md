@@ -1,4 +1,15 @@
-# Terra Fusion 5-sensor discrepancy, part 7: OMNI via `clio_cae` — trailing-wildcard filters match nothing
+# Terra Fusion 5-sensor discrepancy, part 7: OMNI via `clio_cae` (wildcard finding RETRACTED)
+
+> **RETRACTED — the trailing-wildcard finding below is WRONG.** `fnmatch` is
+> called with flags=0, so `*` crosses `/` by design, and a trailing wildcard
+> works fine when the match is small. The real cause was **CTE tier
+> exhaustion**: the tier accumulates across runs, and this sweep drove one
+> long-lived runtime, so later patterns failed on a tier earlier ones had
+> filled. On a clean runtime the same `/ASTER/*/TIR/*` schedules in 6.20 s with
+> zero PutBlob failures. See
+> [part 8](20260918_claude_terra_fusion_discrepancy_08_cae_telemetry.md).
+> The rest of this report — wrong tool in parts 5-6, the `clio_cae_core` pool
+> requirement, and the selectivity timings — stands.
 
 Run on **ares**, 2026-09-18. **Supersedes
 [part 5](20260918_claude_terra_fusion_discrepancy_05_omni.md) and
