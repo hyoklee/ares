@@ -3,6 +3,17 @@
 Run on **ares**, 2026-09-18. Stage 5 of the CLAUDE.md task: "adjust parameters
 for OMNI file to maximize hardware utilization such as NVMe and clusters."
 
+> **RESOLVED** in
+> [part 6](20260918_claude_terra_fusion_discrepancy_06_omni_rebuilt.md): CAE was
+> rebuilt with `USE_HDF5=ON` and OMNI now does real parallel HDF5 reads. Two
+> corrections to the analysis below: the URI does **not** need a colon (that was
+> `h5.cc`'s `ParseHdf5Uri`, which is **dead code** — the live parser wants
+> `hdf5://<file>.h5/<dataset>`, all slashes), and the real blocker for the
+> existing configs is that the dataset key must be a **top-level `src:`**. With
+> it working, `max_scale` turns out to be inert and the hyperslab is read only
+> after the full dataset, so there is still nothing to tune — now for measured
+> reasons.
+
 **Result: there is nothing to tune in this build.** `wrp put` parses the OMNI
 YAML and performs no I/O. Two independent defects, either of which alone is
 fatal.
