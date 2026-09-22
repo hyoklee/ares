@@ -141,6 +141,67 @@ multi-transfer OMNI job over one file pays it once per transfer.
 That observation is only available because the phase timings exist, which is the
 argument for the instrumentation.
 
+## The remaining hole, closed
+
+The first telemetry pass still left a failed ingest reporting success. Three
+separate causes, not one — committed as `e6635e55` on the same branch.
+
+**1. The client read the wrong field.** `clio_cae` checked `GetReturnCode()`,
+the task framework's `return_code_`. The CAE runtime signals failure through
+`task->result_code_` / `error_message_` and **never calls `SetReturnCode()`**,
+so the framework code stayed 0 over a failed run. The information existed;
+nothing consumed it. `core_runtime.cc` now mirrors failures onto
+`SetReturnCode()`, and the client checks both and prints `error_message_`.
+
+**2. An empty include-match returned SUCCESS** — and this is the one that
+matters, because it is *not* the failure part 7 saw. The assimilator filtered to
+zero datasets, processed nothing and returned 0, so ParseOmni counted the
+transfer as scheduled: **`Tasks scheduled: 1`, not 0**. A mistyped pattern was
+silently a no-op with a success exit code. My first attempt guarded on
+`num_tasks_scheduled == 0`, which only catches the `PutBlob` path; a test caught
+that, not my reasoning.
+
+Now returns `-9` when `include_patterns` is non-empty and matches nothing. An
+**absent** filter still legitimately takes everything and is unaffected.
+
+**3. Completion was implied but asynchronous** — the success path now says so.
+
+Verified on an isolated runtime:
+
+| case | exit | telemetry |
+| --- | --- | --- |
+| no-match pattern | **1** (`result_code=-9`) | `{discovered:1691, filtered:0, error_code:-9, assimilate_ms:0}` |
+| valid pattern | **0** | `{discovered:1691, filtered:7, error_code:0, assimilate_ms:422.9}` |
+
+The messages deliberately encode what cost most time here: that assimilation
+runs **server-side** so dataset errors land in the runtime log, that
+`PutBlob failed` means a full CTE tier, and that **`*` does cross `/`**
+(`fnmatch` flags=0) so the next reader checks the path prefix rather than
+re-deriving the retracted wildcard theory.
+
+## Two environment findings
+
+**`CLIO_CAE_TELEMETRY` must be set on `clio_run`, not `clio_cae`.** The
+assimilator runs server-side, so setting it on the client produces an empty
+file. Same server/client split that hides the logs, and the natural instinct —
+setting it on the tool you invoke — is wrong.
+
+**Another user holds port 9413 on ares.** `jcernudagarcia`'s
+`clio-infrastructure-acceptance-20260922` binds the same port
+`clio_default.yaml` defaults to. A client can therefore reach *someone else's*
+runtime. This is not hypothetical: it may independently explain the `PutBlob
+failed` errors attributed above to tier exhaustion, since that tier would not
+have been mine.
+
+**Consequence: the part 7 selectivity timings and the tier-exhaustion narrative
+in this report both need re-measuring on an isolated port before either is
+relied on.** Use a private `networking.port` and `CLIO_MEMFD_DIR`:
+
+```sh
+sed -e 's/^\( *port:\) *9413/\1 9613/' clio_default.yaml > rt.yaml
+export CLIO_MEMFD_DIR=/dev/shm/mine_$$
+```
+
 ## Caveats
 
 * Telemetry covers the HDF5 assimilator only, not S3/GCS/binary paths.
@@ -152,9 +213,12 @@ argument for the instrumentation.
   malformed pattern from a correct pattern that genuinely matches nothing.
 * Not tested in distributed mode (`num_nodes > 1`); the field is recorded but
   only the single-node path was exercised.
-* Tier capacity is still not surfaced to the client. `PutBlob` failures appear
-  as `dataset_errors` in telemetry and in the runtime log, but a user without
-  either still sees "success".
+* Tier capacity is still not surfaced as a *distinct* condition. `PutBlob`
+  failures now reach the exit status via `result_code_`, and the error text
+  names a full tier as a likely cause, but there is no explicit "tier full"
+  signal or free-capacity readout.
+* The verification used an isolated port; earlier measurements in parts 7-8 did
+  not, and may have involved another user's runtime.
 
 ## Reproducing
 
