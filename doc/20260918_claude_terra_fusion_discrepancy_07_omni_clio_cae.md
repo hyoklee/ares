@@ -8,6 +8,11 @@
 > filled. On a clean runtime the same `/ASTER/*/TIR/*` schedules in 6.20 s with
 > zero PutBlob failures. See
 > [part 8](20260918_claude_terra_fusion_discrepancy_08_cae_telemetry.md).
+>
+> **Re-measured 2026-09-23 on an isolated port with a fresh runtime per cell:
+> every pattern in the table below succeeds.** `/ASTER/*/SWIR/*` assimilates 256
+> datasets and `*/Geolocation/*` 343, both with zero errors. The timings below
+> are also wrong in shape — cost tracks bytes selected, not datasets matched.
 > The rest of this report — wrong tool in parts 5-6, the `clio_cae_core` pool
 > requirement, and the selectivity timings — stands.
 

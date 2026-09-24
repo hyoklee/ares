@@ -179,6 +179,47 @@ runs **server-side** so dataset errors land in the runtime log, that
 (`fnmatch` flags=0) so the next reader checks the path prefix rather than
 re-deriving the retracted wildcard theory.
 
+## Re-measured on an isolated runtime (2026-09-23)
+
+The part 7 table was measured on the shared default port with an accumulating
+tier. Re-run with a **private port**, a **private `CLIO_MEMFD_DIR`**, and a
+**fresh runtime per cell**, telemetry on the runtime, 3 reps, median:
+
+| pattern | median s | exit | datasets filtered | errors |
+| --- | --- | --- | --- | --- |
+| `/ASTER/granule_11182001013943/TIR/ImageData10` | 0.18 | 0 | 1 | 0 |
+| `/ASTER/*/TIR/ImageData10` | 0.73 | 0 | 32 | 0 |
+| `/ASTER/*/SWIR/ImageData4` | 5.27 | 0 | 32 | 0 |
+| `/ASTER/*/TIR/*` | 6.36 | 0 | **224** | 0 |
+| `/ASTER/*/SWIR/*` | 76.2 | **0** | **256** | 0 |
+| `*/Geolocation/*` | 193.9 | **0** | **343** | 0 |
+
+**Every pattern succeeds.** The three that part 7 reported as matching nothing
+assimilate **224, 256 and 343 datasets with zero errors**. Discovery reports
+`1691` in every row regardless of filter, confirming the fixed per-transfer cost.
+
+### Cost tracks bytes, not dataset count
+
+This inverts part 7's reading. 32 SWIR datasets (~1 GB) cost 5.3 s while 224 TIR
+datasets (~760 MB) cost 6.4 s — SWIR chunks are ~10x larger, so per-dataset cost
+differs by an order of magnitude. `dataset_filter` selectivity is worth using,
+but the quantity to minimise is **bytes selected**, not paths matched.
+
+### Provenance of these numbers
+
+Two of six cells were lost to harness faults across the two replicates that
+produced this table — `geo` to `local server port is already bound` (the socket
+outlives `kill -9` after a heavy ingest) and `tirall` to
+`shm_attach(chi_main_segment_..._<port>) failed` (the SHM segment name embeds
+the port, so reusing one port let a stale segment collide). Each pattern
+therefore succeeded in at least one replicate, but **no single run was clean
+end-to-end**. Both faults are fixed in
+[`bin/tf_cae_sweep_clean.sh`](../bin/tf_cae_sweep_clean.sh) — it now waits for
+the port to be released, purges stale SHM, and gives every cell its own port.
+
+Worth noting both faults surfaced as **exit 1** rather than silent success:
+the error-surfacing fix catching failures nobody planted.
+
 ## Two environment findings
 
 **`CLIO_CAE_TELEMETRY` must be set on `clio_run`, not `clio_cae`.** The
