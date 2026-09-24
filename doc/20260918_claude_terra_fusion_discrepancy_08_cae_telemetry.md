@@ -192,7 +192,7 @@ tier. Re-run with a **private port**, a **private `CLIO_MEMFD_DIR`**, and a
 | `/ASTER/*/SWIR/ImageData4` | 5.27 | 0 | 32 | 0 |
 | `/ASTER/*/TIR/*` | 6.36 | 0 | **224** | 0 |
 | `/ASTER/*/SWIR/*` | 76.2 | **0** | **256** | 0 |
-| `*/Geolocation/*` | 193.9 | **0** | **343** | 0 |
+| `*/Geolocation/*` | 193.9-210.5 | **0** | **343** | 0 |
 
 **Every pattern succeeds.** The three that part 7 reported as matching nothing
 assimilate **224, 256 and 343 datasets with zero errors**. Discovery reports
@@ -205,20 +205,47 @@ datasets (~760 MB) cost 6.4 s — SWIR chunks are ~10x larger, so per-dataset co
 differs by an order of magnitude. `dataset_filter` selectivity is worth using,
 but the quantity to minimise is **bytes selected**, not paths matched.
 
-### Provenance of these numbers
+### Provenance: three runs, and no single one is six-for-six
 
-Two of six cells were lost to harness faults across the two replicates that
-produced this table — `geo` to `local server port is already bound` (the socket
-outlives `kill -9` after a heavy ingest) and `tirall` to
-`shm_attach(chi_main_segment_..._<port>) failed` (the SHM segment name embeds
-the port, so reusing one port let a stale segment collide). Each pattern
-therefore succeeded in at least one replicate, but **no single run was clean
-end-to-end**. Both faults are fixed in
-[`bin/tf_cae_sweep_clean.sh`](../bin/tf_cae_sweep_clean.sh) — it now waits for
-the port to be released, purges stale SHM, and gives every cell its own port.
+The table above is the union of three independent runs. Per-cell outcomes,
+seconds where the cell passed:
 
-Worth noting both faults surfaced as **exit 1** rather than silent success:
-the error-surfacing fix catching failures nobody planted.
+| pattern | run 1 (9713) | run 2 (9813) | run 3 (9901-06, per-cell ports) | passes |
+| --- | --- | --- | --- | --- |
+| `…/TIR/ImageData10` | 0.18 | 0.18 | 0.21 | **3/3** |
+| `/ASTER/*/TIR/ImageData10` | 0.73 | 1.83 | 0.76 | **3/3** |
+| `/ASTER/*/SWIR/ImageData4` | 5.27 | 7.36 | 5.04 | **3/3** |
+| `/ASTER/*/TIR/*` | 6.36 | **FAIL** | 6.00 | 2/3 |
+| `/ASTER/*/SWIR/*` | 76.2 | 75.1 | **FAIL** | 2/3 |
+| `*/Geolocation/*` | **FAIL** | 193.9 | 210.5 | 2/3 |
+
+**Every pattern passes at least twice, with zero `dataset_errors` in every
+passing cell, and the counts (1 / 32 / 32 / 224 / 256 / 343) are identical
+wherever a cell passes.** That is what the conclusion rests on. What has *not*
+been achieved is a single run that is clean end-to-end.
+
+Three distinct harness faults, all mine, none a CAE defect:
+
+1. **Port lingers past `kill -9`** after a heavy ingest — cost `geo` in run 1.
+   Fixed with an explicit port-release wait.
+2. **Stale SHM segment collides** — the segment name embeds the port
+   (`chi_main_segment_<user>_<port>`), so reusing one port across cells let the
+   previous segment collide. Cost `tirall` in run 2. Fixed with per-cell ports,
+   and `tirall` duly passed in run 3.
+3. **Intermittent client `shm_attach` failure under a large ingest** — cost
+   `swir` in run 3, on a runtime that stayed *alive* throughout (scheduler still
+   logging) with **zero `PutBlob failed`**. So neither a crash nor tier
+   exhaustion. **Unresolved.**
+
+A reporting flaw compounds fault 3: the harness records `last_exit` across its 3
+reps, so one flaky rep condemns a cell even when the others passed. `swir`
+passed cleanly in runs 1 and 2 at 76.2 s and 75.1 s with 256 datasets. Recording
+per-rep outcomes would separate "the measurement failed" from "one attempt
+flaked", and should be done before this harness is trusted unattended.
+
+Every one of these faults surfaced as **exit 1** rather than silent success —
+the error-surfacing fix catching failures nobody planted, which is the strongest
+evidence it works.
 
 ## Two environment findings
 
