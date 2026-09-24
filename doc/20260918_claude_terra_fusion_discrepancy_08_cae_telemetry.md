@@ -185,14 +185,18 @@ The part 7 table was measured on the shared default port with an accumulating
 tier. Re-run with a **private port**, a **private `CLIO_MEMFD_DIR`**, and a
 **fresh runtime per cell**, telemetry on the runtime, 3 reps, median:
 
+One **clean six-for-six run**, 3 reps per cell, median seconds
+(ports 9971-9976, fresh runtime per cell, zero `shm_open` failures in 18 client
+runs):
+
 | pattern | median s | exit | datasets filtered | errors |
 | --- | --- | --- | --- | --- |
 | `/ASTER/granule_11182001013943/TIR/ImageData10` | 0.18 | 0 | 1 | 0 |
-| `/ASTER/*/TIR/ImageData10` | 0.73 | 0 | 32 | 0 |
-| `/ASTER/*/SWIR/ImageData4` | 5.27 | 0 | 32 | 0 |
-| `/ASTER/*/TIR/*` | 6.36 | 0 | **224** | 0 |
-| `/ASTER/*/SWIR/*` | 76.2 | **0** | **256** | 0 |
-| `*/Geolocation/*` | 193.9-210.5 | **0** | **343** | 0 |
+| `/ASTER/*/TIR/ImageData10` | 0.74 | 0 | 32 | 0 |
+| `/ASTER/*/SWIR/ImageData4` | 4.75 | 0 | 32 | 0 |
+| `/ASTER/*/TIR/*` | 6.01 | 0 | **224** | 0 |
+| `/ASTER/*/SWIR/*` | 62.1 | **0** | **256** | 0 |
+| `*/Geolocation/*` | 202.8 | **0** | **343** | 0 |
 
 **Every pattern succeeds.** The three that part 7 reported as matching nothing
 assimilate **224, 256 and 343 datasets with zero errors**. Discovery reports
@@ -205,7 +209,7 @@ datasets (~760 MB) cost 6.4 s — SWIR chunks are ~10x larger, so per-dataset co
 differs by an order of magnitude. `dataset_filter` selectivity is worth using,
 but the quantity to minimise is **bytes selected**, not paths matched.
 
-### Provenance: three runs, and no single one is six-for-six
+### Provenance: four runs, the last one clean
 
 The table above is the union of three independent runs. Per-cell outcomes,
 seconds where the cell passed:
@@ -219,10 +223,10 @@ seconds where the cell passed:
 | `/ASTER/*/SWIR/*` | 76.2 | 75.1 | **FAIL** | 2/3 |
 | `*/Geolocation/*` | **FAIL** | 193.9 | 210.5 | 2/3 |
 
-**Every pattern passes at least twice, with zero `dataset_errors` in every
-passing cell, and the counts (1 / 32 / 32 / 224 / 256 / 343) are identical
-wherever a cell passes.** That is what the conclusion rests on. What has *not*
-been achieved is a single run that is clean end-to-end.
+A fourth run, after the `shm_attach` fix below, was **clean six-for-six**: every
+cell exit 0, zero `dataset_errors`, zero attach failures across 18 client runs,
+and the same counts (1 / 32 / 32 / 224 / 256 / 343) the earlier partial runs
+produced. The table above is that run.
 
 Three distinct harness faults, all mine, none a CAE defect:
 
@@ -232,16 +236,62 @@ Three distinct harness faults, all mine, none a CAE defect:
    (`chi_main_segment_<user>_<port>`), so reusing one port across cells let the
    previous segment collide. Cost `tirall` in run 2. Fixed with per-cell ports,
    and `tirall` duly passed in run 3.
-3. **Intermittent client `shm_attach` failure under a large ingest** — cost
-   `swir` in run 3, on a runtime that stayed *alive* throughout (scheduler still
-   logging) with **zero `PutBlob failed`**. So neither a crash nor tier
-   exhaustion. **Unresolved.**
+3. **Intermittent client `shm_attach` failure** — cost `swir` in run 3.
+   **Root-caused and fixed**; see below.
 
-A reporting flaw compounds fault 3: the harness records `last_exit` across its 3
-reps, so one flaky rep condemns a cell even when the others passed. `swir`
-passed cleanly in runs 1 and 2 at 76.2 s and 75.1 s with 256 datasets. Recording
-per-rep outcomes would separate "the measurement failed" from "one attempt
-flaked", and should be done before this harness is trusted unattended.
+### The `shm_attach` failure: a stale readiness check, not a clio defect
+
+Symptom: `shm_open failed: No such file or directory`, then
+`shm_attach(main='chi_main_segment_<user>_<port>') failed`, 60 retries, client
+exit 1 — on a runtime that stayed **alive** with **zero `PutBlob failed`**.
+
+The mechanism is specific to how clio publishes shared memory. The segments are
+**not** POSIX shm objects in `/dev/shm`. On Linux they are **memfds**, published
+in `CLIO_MEMFD_DIR` as symlinks into the runtime's fd table:
+
+```
+chi_main_segment_hyoklee_9950 -> /proc/1233864/fd/5
+```
+
+Killing the runtime leaves the symlink but destroys its target:
+
+```
+before kill:  -e EXISTS   target=/proc/1233864/fd/5
+after  kill:  -e MISSING  but the symlink itself is still present
+```
+
+So a client attaching to a *published but dangling* link gets exactly this
+ENOENT. Two harness mistakes produced that state:
+
+* **Stale readiness.** One reused `rt.log` was grepped for "pools created
+  successfully" immediately after launch, so the **previous** rep's success line
+  could satisfy the check before the shell truncated the file. False ready →
+  client attaches before the new runtime has published its segments.
+* **Wrong location.** The belt-and-braces existence check looked in `/dev/shm`,
+  which never holds these segments, so it passed unconditionally.
+
+Fixed with a unique log per start and an assertion on the memfd symlink using
+`-e`, which **follows** the link and is therefore false both when it is absent
+and when it is dangling — the two states that cause the ENOENT. Hammering the
+flaky cell five consecutive times afterwards: **0 attach failures**, against 60
+in the single run that failed.
+
+**Generalisable warning:** a leftover `CLIO_MEMFD_DIR` from a dead runtime is
+actively hazardous. It is full of symlinks that look present to `ls` or a `-L`
+test but resolve to nothing, so a client pointed at it fails with a message
+reading like missing shared memory rather than "your runtime is gone". The
+runtime pid file (`chi_runtime_pid_<user>_<port>`) sits in the same directory
+and would let clio detect and report a stale directory directly.
+
+A reporting flaw compounded fault 3 while it lasted: the harness records
+`last_exit` across its 3 reps, so one flaky rep condemned a cell even when the
+others passed. Per-rep recording would separate "the measurement failed" from
+"one attempt flaked" and is still worth adding.
+
+All three faults shared one shape: **a check that looked sufficient but tested
+the wrong thing** — a reused log for readiness, a port assumed free the instant
+`kill -9` returned, and memfd segments sought in `/dev/shm`. Each produced
+intermittent failures that read at first like defects in the system under test.
 
 Every one of these faults surfaced as **exit 1** rather than silent success —
 the error-surfacing fix catching failures nobody planted, which is the strongest

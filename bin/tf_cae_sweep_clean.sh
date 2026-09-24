@@ -61,13 +61,34 @@ start_runtime() {                      # $1 = telemetry path
   done
   sleep 2
   rm -rf "$CLIO_MEMFD_DIR"; mkdir -p "$CLIO_MEMFD_DIR"
+  # A UNIQUE log per start. Reusing one rt.log lets the readiness grep match the
+  # PREVIOUS start's "pools created successfully" before the shell truncates the
+  # file -- a false ready, after which the client attaches to a segment that does
+  # not exist yet and dies with
+  #   shm_open failed: No such file or directory
+  #   shm_attach(main='chi_main_segment_<user>_<port>') failed
+  RTLOG=$WORK/rt_${PORT}_$(date +%s%N).log
+  ln -sf "$RTLOG" "$WORK/rt.log"
   CLIO_SERVER_CONF=$WORK/rt.yaml CLIO_MEMFD_DIR=$CLIO_MEMFD_DIR \
     CLIO_CAE_TELEMETRY="$1" LD_LIBRARY_PATH=$P/lib \
-    setsid nohup "$P/bin/clio_run" start > rt.log 2>&1 &
-  for _ in $(seq 1 90); do
-    grep -q "pools created successfully" rt.log 2>/dev/null && { sleep 1; return 0; }
+    setsid nohup "$P/bin/clio_run" start > "$RTLOG" 2>&1 &
+  # The segments are NOT POSIX shm objects in /dev/shm. On Linux they are
+  # memfds, published in CLIO_MEMFD_DIR as symlinks into /proc/<pid>/fd:
+  #     chi_main_segment_<user>_<port> -> /proc/<runtime pid>/fd/5
+  # `-e` FOLLOWS the symlink, so it is false both when the link is absent and
+  # when the owning runtime has died leaving it dangling -- which are precisely
+  # the two states that make a client fail with
+  #     shm_open failed: No such file or directory
+  local seg="$CLIO_MEMFD_DIR/chi_main_segment_$(id -un)_${PORT}"
+  for _ in $(seq 1 120); do
+    # Belt and braces: the log line AND the segment actually existing. The log
+    # alone is not proof the client can attach.
+    if grep -q "pools created successfully" "$RTLOG" 2>/dev/null && [ -e "$seg" ]; then
+      sleep 1; return 0
+    fi
     sleep 1
   done
+  echo "    start_runtime: timeout (log_ready=$(grep -qc 'pools created successfully' "$RTLOG" 2>/dev/null || echo 0) seg_exists=$([ -e "$seg" ] && echo 1 || echo 0))" >&2
   return 1
 }
 
@@ -100,6 +121,8 @@ for spec in \
   "swir:/ASTER/*/SWIR/*" \
   "geo:*/Geolocation/*" ; do
   tag=${spec%%:*}; pat=${spec#*:}
+  # TAGS="swir geo" restricts the sweep to named cells
+  if [ -n "${TAGS:-}" ]; then case " $TAGS " in *" $tag "*) ;; *) continue ;; esac; fi
   next_port
   cfg "$tag" "$pat"
   times=(); last_exit=0; last_tasks="?"
