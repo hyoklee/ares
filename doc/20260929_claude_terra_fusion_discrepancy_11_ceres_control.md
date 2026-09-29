@@ -107,6 +107,13 @@ block whatever the grid — coarsening the target adds no MOPITT information.
 
 ### What is left for MOPITT
 
+> **ANSWERED in
+> [part 12](20260929_claude_terra_fusion_discrepancy_12_mopitt_coherence.md):
+> the hypothesis below is supported.** MOPITT's four channels agree with each
+> other at median |rho| = 0.799 — above the MODIS-vs-CERES control of 0.711 —
+> so its regridded field carries coherent structure and is not noise-dominated.
+> Under the matched configuration no sensor pair falls below |rho| = 0.44.
+
 The remaining candidate is that **MOPITT is measuring a different geophysical
 quantity**. It retrieves CO, a chemical tracer whose spatial structure need not
 follow the cloud-and-surface-temperature field that ASTER, MODIS and CERES all
