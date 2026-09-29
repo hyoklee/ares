@@ -157,6 +157,16 @@ established.** Parts 10 and 11 caught it in band selection, part 12 in the
 loading ordering, and here in a caption written from visual impression. The
 16-band evidence was available the whole time.
 
+## Per-band detail
+
+[Part 15](20260929_claude_terra_fusion_discrepancy_15_band_detail.md) opens C₁₆
+up band by band for blocks 3 and 13. Two results bear on this part: the
+window/CO₂ family's internal coherence drops 0.729 → 0.553 between them while
+the water-vapour family rises 0.484 → 0.705 — consistent with block 13's cloud
+deck being what bands 27/28 are sensing — and bands 27/36 sit at the noise floor
+(sd < 0.7 K, loading ≈ 0), so C₁₆ = λ₁/16 is diluted by channels that cannot
+physically participate.
+
 ## Caveats
 
 * **This is a proxy, not MOD35.** The band *tests* are MOD35's; its thresholds,
