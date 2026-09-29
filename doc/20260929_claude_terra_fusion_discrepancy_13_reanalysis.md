@@ -178,8 +178,16 @@ and the four siblings.*
 Three things are visible that the numbers state but do not show:
 
 * **ASTER and MODIS are near-duplicates.** Same fine structure, consistent with
-  their median |ρ| of 0.925. The scene is terrain-dominated — cold ridges, warm
-  valleys, the Hidaka/Yubari relief of central Hokkaido — not a cloud field.
+  their median |ρ| of 0.925. ~~The scene is terrain-dominated — cold ridges, warm
+  valleys, the Hidaka/Yubari relief of central Hokkaido — not a cloud field.~~
+  **CORRECTED in
+  [part 14](20260929_claude_terra_fusion_discrepancy_14_modis_16band.md): this
+  is a cloud field.** BT₃₁ = 257.4 K is far too cold for clear land at 43°N in
+  November, and BTD(20−31) = +34.4 K is a water-cloud solar-reflection
+  signature. The ridge-and-valley appearance is cloud-top structure, plausibly
+  organised by the terrain beneath but that is untested. The sentence above was
+  written from visual impression without checking the bands, which were
+  available.
 * **MISR is close to the photographic negative of them.** Where the thermal
   sensors are bright, MISR red is dark. That is the reflective-vs-thermal
   anticorrelation sign alignment is designed to absorb, and it is why MISR still
@@ -223,12 +231,14 @@ versus terrain structure that only the 1 km sensors can see. That is the
 scene-contrast mechanism stated concretely — and it is also why block 13 is a
 residual outlier rather than simply a quiet block.
 
-This is **qualitative support** for the terrain reading above, and it is worth
-being precise about its status: the images show that block 13's scene is
-organised by relief at a scale the 2.5° reanalysis cannot represent, which is
-consistent with the sub-grid anomaly. They do **not** measure it. The
-elevation correlations in the previous section remain the only quantitative
-test, and they were marginal.
+These images show structure at a scale the 2.5° reanalysis cannot represent,
+which is consistent with the sub-grid anomaly. What they do **not** do is
+identify what the structure is — and the terrain reading first drawn from them
+was wrong. See
+[part 14](20260929_claude_terra_fusion_discrepancy_14_modis_16band.md), which
+identifies the scene from MODIS's 16 emissive bands as a uniform water-cloud
+deck and accounts for most of block 13's residual by its lack of thermal
+contrast (z = −2.81 → −1.43).
 
 ## What would settle it
 
