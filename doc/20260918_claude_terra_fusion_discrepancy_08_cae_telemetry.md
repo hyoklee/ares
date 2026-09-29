@@ -4,6 +4,11 @@ Run on **ares**, 2026-09-18. Three tasks: fix the `dataset_filter` wildcard
 issue, verify data actually reaches CTE, and add telemetry to CAE. The first
 turned out to have no bug to fix.
 
+> **Follow-up:** pushing this work as a PR showed the client-side fix below has
+> a twin in clio-core's own test suite — five CAE unit tests were passing on
+> macOS and Windows while every `PutBlob` failed with rc 11. See
+> [part 9](20260928_claude_terra_fusion_discrepancy_09_silent_puts.md).
+
 ## Retraction: there is no trailing-wildcard bug
 
 [Part 7](20260918_claude_terra_fusion_discrepancy_07_omni_clio_cae.md) claimed
