@@ -19,7 +19,7 @@ blocks=json.load(open('aster_blocks.json'))
 import netCDF4
 F='/mnt/common/datasets-staging/TERRA_BF_L1B_O10204_20011118010522_F000_V001.h5'
 d=netCDF4.Dataset(F)
-RES=0.02; PAD=0.05
+RES=float(os.environ.get('TF_RES','0.02')); PAD=0.05
 # Per-sensor search radius matched to NATIVE FOOTPRINT. A uniform 3 km radius
 # leaves MOPITT (22 km footprint, 6-19 pixels/block) covering almost no target
 # cells, so requiring all five sensors at the same cell yields zero cells.

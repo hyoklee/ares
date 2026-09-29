@@ -26,6 +26,17 @@ F = os.environ.get(
     'TF_GRANULE',
     '/mnt/common/datasets-staging/TERRA_BF_L1B_O10204_20011118010522_F000_V001.h5')
 BAND_IDX = int(os.environ.get('MODIS_BAND_IDX', '0'))
+# CERES channel. LW_Radiance (parts 2-10) is BROADBAND longwave (~5-100 um);
+# WN_Radiance is the 8-12 um WINDOW channel, which overlaps ASTER TIR-10
+# (8.29 um) and MODIS band 31 (11.03 um) directly. Swapping it is the CERES-side
+# analogue of part 10's MODIS band control, and separates a spectral cause
+# (broadband integral) from a geometric one (~20 km footprint vs a 2 km grid).
+CERES_FIELD = os.environ.get('CERES_FIELD', 'LW_Radiance')
+# MOPITT channel index into MOPITTRadiances[...,chan,state]. Only 4..7 carry
+# data. The file does not record a wavelength per index, so these are reported
+# by index rather than by an assumed band.
+MOPITT_CHAN = int(os.environ.get('MOPITT_CHAN', '4'))
+MOPITT_STATE = int(os.environ.get('MOPITT_STATE', '0'))
 PAD = 0.05
 
 blocks = json.load(open('aster_blocks.json'))
@@ -45,6 +56,10 @@ def vmask(var, a):
     _FillValue of -9999, and a fill-value-only test lets it through."""
     m = np.isfinite(a)
     vmin = getattr(var, 'valid_min', None); vmax = getattr(var, 'valid_max', None)
+    vr = getattr(var, 'valid_range', None)   # CERES spells it this way
+    if vr is not None and len(vr) == 2:
+        if vmin is None: vmin = vr[0]
+        if vmax is None: vmax = vr[1]
     if vmin is not None: m &= (a >= float(vmin))
     if vmax is not None: m &= (a <= float(vmax))
     fv = getattr(var, '_FillValue', None)
@@ -94,7 +109,7 @@ for gn, g in d['CERES'].groups.items():
         la = np.asarray(tp['Latitude'][:], 'f8'); lo = np.asarray(tp['Longitude'][:], 'f8')
         m = ok(la, lo) & (la >= LA0) & (la <= LA1) & (lo >= LO0) & (lo <= LO1)
         if not m.any(): continue
-        LW = g[fm]['Radiances']['LW_Radiance']
+        LW = g[fm]['Radiances'][CERES_FIELD]
         v = np.asarray(LW[:], 'f8'); m &= vmask(LW, v)
         cla.append(la[m]); clo.append(lo[m]); cv.append(v[m])
 SRC['CERES'] = (np.concatenate(cla), np.concatenate(clo), np.concatenate(cv))
@@ -106,7 +121,7 @@ G = d['MOPITT']['granule_20011118']['Geolocation']
 la = np.asarray(G['Latitude'][:], 'f8'); lo = np.asarray(G['Longitude'][:], 'f8')
 m = ok(la, lo) & (la >= LA0) & (la <= LA1) & (lo >= LO0) & (lo <= LO1)
 MR = d['MOPITT']['granule_20011118']['Data_Fields']['MOPITTRadiances']
-v = np.asarray(MR[:, :, :, 4, 0], 'f8')   # only channels [4,*] and [6,*] hold data
+v = np.asarray(MR[:, :, :, MOPITT_CHAN, MOPITT_STATE], 'f8')   # only 4..7 hold data
 m &= vmask(MR, v)
 SRC['MOPITT'] = (la[m], lo[m], v[m]); T['read_MOPITT'] = time.time() - t
 
@@ -120,10 +135,15 @@ for k, (a, b, c) in SRC.items():
           f'val[{c.min():.4g},{c.max():.4g}]', flush=True)
 
 tag = f'b{band_label}'
+if CERES_FIELD != 'LW_Radiance':
+    tag += '_' + CERES_FIELD.replace('_Radiance', '').replace('_Filtered', 'F')
+if (MOPITT_CHAN, MOPITT_STATE) != (4, 0):
+    tag += f'_m{MOPITT_CHAN}{MOPITT_STATE}'
 path = os.environ.get('TF_NPZ', f'regrid_inputs_{tag}.npz')
 np.savez(path, **out)
 json.dump(dict(timings=T, modis_band_idx=BAND_IDX, modis_band=band_label,
-               npz=path, granule=F),
+               ceres_field=CERES_FIELD, mopitt_chan=MOPITT_CHAN,
+               mopitt_state=MOPITT_STATE, npz=path, granule=F),
           open(f'sources_{tag}.json', 'w'), indent=1)
-print(f'\n# MODIS band index {BAND_IDX} -> band {band_label}')
+print(f'\n# MODIS band index {BAND_IDX} -> band {band_label}; CERES {CERES_FIELD}')
 print(f'# wrote {path}')

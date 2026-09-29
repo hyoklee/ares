@@ -140,6 +140,15 @@ investigate.
 
 ## The new open question: CERES
 
+> **RESOLVED in
+> [part 11](20260929_claude_terra_fusion_discrepancy_11_ceres_control.md):
+> spectral, and the footprint hypothesis below is refuted.** Swapping
+> `LW_Radiance` (broadband 5-100 µm) for `WN_Radiance` (the 8-12 µm window
+> channel) takes CERES from weakest in 20/32 to weakest in **1/32**, with the
+> footprint held identical. The section below reads the sparsity evidence
+> correctly but was wrong to keep the footprint in play as the leading
+> alternative.
+
 Under a thermal MODIS band, CERES is weakest in **20 of 32** blocks. The obvious
 explanation is sparsity — but it does not hold:
 
