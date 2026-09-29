@@ -1,69 +1,56 @@
-# Prerequisites
-*.d
 
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-*.so.*
-
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
 *.a
-*.lib
-
-# Executables
-*.exe
-*.out
 *.app
-
-# Build directories
+*.bak
+build-*/
 build/
 Build/
-build-*/
-
-# CMake generated files
-CMakeFiles/
+# Build directories
+.cache/
 CMakeCache.txt
+CMakeFiles/
+# CMake generated files
 cmake_install.cmake
-Makefile
-install_manifest.txt
 compile_commands.json
-
-# Temporary files
-*.tmp
+# Compiled Dynamic libraries
+# Compiled Object files
+# Compiled Static libraries
+*.d
+# Debugger Files
+# debug information files
+*.dll
+*.dwo
+*.dylib
+*.exe
+# Executables
+# Fortran module files
+*.gch
+*.ilk
+install_manifest.txt
+*.la
+*.lai
+*.lib
+# Linker files
+*.lo
 *.log
-*.bak
+Makefile
+*.mod
+*.o
+*.obj
+*.out
+*.pch
+*.pdb
+# Precompiled Headers
+# Prerequisites
+*.slo
+*.smod
+*.so
+*.so.*
 *.swp
-
+# Temporary files
+Testing/
+# test output & cache
+*.tmp
 # vcpkg
 vcpkg_installed/
-
-# debug information files
-*.dwo
-
-# test output & cache
-Testing/
-.cache/
+.venv-tf/

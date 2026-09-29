@@ -12,7 +12,9 @@ Replaces the pairwise z-score RMS of part 2 with:
 import numpy as np, json, os, sys, time
 sys.path.insert(0,os.path.expanduser('~/src/TerraFusion/pytaf'))
 import pytaf
-D=np.load('regrid_inputs.npz', allow_pickle=True); SRC={k:D[k] for k in D.files}
+NPZ=os.environ.get('TF_NPZ','regrid_inputs.npz')
+TAG=os.environ.get('TF_TAG', os.path.basename(NPZ)[len('regrid_inputs'):].lstrip('_').removesuffix('.npz') or 'default')
+D=np.load(NPZ, allow_pickle=True); SRC={k:D[k] for k in D.files}
 blocks=json.load(open('aster_blocks.json'))
 import netCDF4
 F='/mnt/common/datasets-staging/TERRA_BF_L1B_O10204_20011118010522_F000_V001.h5'
@@ -107,14 +109,14 @@ for i,b in enumerate(blocks):
                      n=len(names),ncell=int(good.sum()),congruence=C,kendall_w=W,
                      loadings=load,weakest=lo_s,load_gap=gap,
                      signs={names[q]:int(sign[q]) for q in range(len(names))}))
-print(f'# {len(rows)} blocks, {time.time()-t0:.1f}s')
+print(f'# {len(rows)} blocks, {time.time()-t0:.1f}s  [{TAG}]')
 rows.sort(key=lambda r:r['congruence'])
 print(f'\n# LEAST congruent first (C=1/n means fully incongruent, 1.0 fully congruent)')
 print(f'{"rk":>2} {"blk":>3} {"lat0":>6} {"lat1":>6} {"n":>2} {"C5":>6} {"Cd":>6} {"W":>6} {"weakest":>7} {"gap":>5}  loadings (sign-aligned)')
 for r,x in enumerate(rows[:10]):
     ld=' '.join(f'{k[:4]}={v:.2f}' for k,v in sorted(x['loadings'].items(),key=lambda y:-y[1]))
     print(f'{r:2d} {x["blk"]:3d} {x["lat0"]:6.2f} {x["lat1"]:6.2f} {x["n"]:2d} {x["congruence"]:6.3f} {x["congruence_dense"]:6.3f} {x["kendall_w"]:6.3f} {x["weakest"]:>7} {x["load_gap"]:5.2f}  {ld}')
-json.dump(rows, open('congruence.json','w'), indent=1)
+json.dump(rows, open(f'congruence_{TAG}.json' if TAG!='default' else 'congruence.json','w'), indent=1)
 cs=[r['congruence'] for r in rows]
 print(f'\n# congruence across 32 blocks: min={min(cs):.3f} median={np.median(cs):.3f} max={max(cs):.3f}')
 from collections import Counter

@@ -6,6 +6,21 @@ multi-sensor congruence statistic that can distinguish CLAUDE.md's two
 hypotheses — *processing error* versus *interesting weather* — rather than only
 ranking disagreement.
 
+> **RETRACTED IN PART — the MODIS finding below is WRONG.** "MODIS is the
+> weakest sensor in 19 of 32 blocks", and block 7 as "the cleanest
+> processing-fault signature in the dataset", are both artifacts of reading
+> `EV_1KM_Emissive` band **20 (3.75 µm)** on a 10:32-local-time overpass, where
+> that channel mixes reflected solar with thermal emission. Re-run at band 29
+> (8.55 µm) or 31 (11.03 µm), MODIS is weakest in **0 of 32** blocks and block 7
+> becomes the second-*most* congruent block in the orbit. See
+> [part 10](20260929_claude_terra_fusion_discrepancy_10_modis_band_control.md),
+> which runs the control this report said was required.
+>
+> **The method below — rank transform, sign alignment, C = λ₁/n, per-sensor
+> loadings, Kendall's W — stands unchanged**, and is what localised the anomaly
+> well enough to make the control obvious. The ranking tables are superseded by
+> part 10's.
+
 ## Why the part-2 metric was not enough
 
 Part 2 ranked blocks by the RMS difference of per-block z-scores. That quantity
