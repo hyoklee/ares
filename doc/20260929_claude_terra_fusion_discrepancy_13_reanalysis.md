@@ -189,6 +189,40 @@ Three things are visible that the numbers state but do not show:
   Voronoi patches from 60 and 17 footprints. They cannot express the terrain
   structure the other three resolve, whatever their spectral match.
 
+### The congruent end, for contrast
+
+![Block 3, five sensors, rank-transformed](../img/tf_blk3_panel.png)
+
+Block 3 (47.83-48.59°N, 143.48-144.71°E, over the Sea of Okhotsk) is the *most*
+congruent block in the orbit, C₅ = 0.867 against block 13's 0.508. Rendered the
+same way, the difference is obvious and it is the mechanism part 13 argues for:
+
+* **One large-amplitude pattern spans the whole block** — bright west, dark east
+  — and *all four* thermal-ish sensors reproduce it, MISR cleanly inverting it.
+* **Even CERES and MOPITT recover it.** They are still coarse Voronoi patches,
+  but a west-east gradient is something 60 and 17 footprints *can* express. In
+  block 13 the structure is terrain-scale, which they cannot.
+* **The loadings collapse together**: 0.47 / 0.45 / 0.45 / 0.43 / 0.43,
+  `load_gap` **0.04**, against block 13's 0.55 / 0.51 / 0.39 / 0.39 / 0.37 and
+  gap 0.18.
+
+| | block 3 | block 13 |
+| --- | --- | --- |
+| C₅ | **0.867** | **0.508** |
+| Kendall W | 0.848 | 0.490 |
+| load_gap | 0.04 | 0.18 |
+| \|∇T\| K/100 km | 2.13 | 1.93 |
+| T °C | −1.0 | +3.3 |
+| wind m/s | 8.0 | 4.9 |
+| surface | ocean, −10 m | land, 132 m |
+
+The two blocks sit in a comparable thermal gradient (2.13 vs 1.93), so the
+difference is **not** synoptic forcing. What differs is what the scene is made
+of: a single ocean-scale radiance boundary that every instrument resolves,
+versus terrain structure that only the 1 km sensors can see. That is the
+scene-contrast mechanism stated concretely — and it is also why block 13 is a
+residual outlier rather than simply a quiet block.
+
 This is **qualitative support** for the terrain reading above, and it is worth
 being precise about its status: the images show that block 13's scene is
 organised by relief at a scale the 2.5° reanalysis cannot represent, which is
