@@ -166,6 +166,36 @@ most interesting thing the series has found — but **the claim that it is a
 weather feature is still unconfirmed**, and nothing here should be read as
 confirming it.
 
+## The block, rendered
+
+![Block 13, five sensors, rank-transformed](../img/tf_blk13_panel.png)
+
+*All five on the common rank scale, restricted to the 1337 cells where every
+sensor is valid — the exact matrix the congruence eigen-decomposition sees.
+Per-sensor images in native units are in [`img/`](../img/): `tf_blk13_ASTER.png`
+and the four siblings.*
+
+Three things are visible that the numbers state but do not show:
+
+* **ASTER and MODIS are near-duplicates.** Same fine structure, consistent with
+  their median |ρ| of 0.925. The scene is terrain-dominated — cold ridges, warm
+  valleys, the Hidaka/Yubari relief of central Hokkaido — not a cloud field.
+* **MISR is close to the photographic negative of them.** Where the thermal
+  sensors are bright, MISR red is dark. That is the reflective-vs-thermal
+  anticorrelation sign alignment is designed to absorb, and it is why MISR still
+  loads 0.39 rather than near zero. But the inversion is not clean at fine
+  scale, and the residual is real disagreement.
+* **CERES and MOPITT are visibly piecewise-constant** — nearest-neighbour
+  Voronoi patches from 60 and 17 footprints. They cannot express the terrain
+  structure the other three resolve, whatever their spectral match.
+
+This is **qualitative support** for the terrain reading above, and it is worth
+being precise about its status: the images show that block 13's scene is
+organised by relief at a scale the 2.5° reanalysis cannot represent, which is
+consistent with the sub-grid anomaly. They do **not** measure it. The
+elevation correlations in the previous section remain the only quantitative
+test, and they were marginal.
+
 ## What would settle it
 
 * **ERA5 at 0.25°** (~3 × 4 cells per block, hourly, so the 01:05Z overpass is
