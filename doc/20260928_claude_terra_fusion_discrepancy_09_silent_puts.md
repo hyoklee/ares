@@ -16,7 +16,7 @@ claimed to report — this time in clio-core's own test suite.
   it.** The macOS runner log says so in one line —
   `Create Warning: No storage devices configured`.
 * **Fix: the fixture registers its own 256 MB RAM target**, so it depends on
-  neither a config file nor host DRAM.
+  neither a config file nor host DRAM. **Confirmed on both runners**, see below.
 * **This is the same bug shape as part 8's.** There, `clio_cae` read
   `GetReturnCode()` while `ParseOmni` wrote `result_code_`. Here, the *test*
   read `GetReturnCode()` while `ParseOmni` wrote `result_code_`. Fixing the
@@ -136,6 +136,28 @@ macOS runner as readily as in a container. The `SetReturnCode()` mirror, which
 had been deferred in `22183d83` so it would not land with the failure hidden, is
 restored in the same commit.
 
+## Confirmation
+
+PR #5 at `7d1e68bb`, all 21 non-skipped checks green:
+
+| runner | result | the five tests |
+| --- | --- | --- |
+| `build-test (macos-15)` | 100% of 283 | `cae_parseomni_binary` 2.05 s, `binaryrange` 2.12 s, `multi` 2.65 s, `verifybinarydata` 2.05 s |
+| `build-test (windows-2025)` | 100% of 242 | the same four plus `cae_comprehensive_force_net` 1.63 s |
+| `icx (windows-2025)` | 0 failed of 241 | all five |
+
+`cae_comprehensive_force_net` is Windows-only here because
+`clio_add_force_net_test()` is a no-op on Apple.
+
+The decisive evidence is what the logs no longer contain. Grepping both for
+`No storage devices configured` and `return_code: 11` returns nothing; those
+lines appeared on every one of these tests in the previous macOS run. And
+because the `SetReturnCode()` mirror is restored in the same commit, the
+assertion is live — so the tests pass *because* the data lands, not in spite of
+it never landing. The runtimes agree: `cae_parseomni_binary` took **1.36 s**
+when it was failing fast on an empty target list and **2.05 s** now that it
+does the writes.
+
 ## What this means for the Terra Fusion pipeline
 
 Part 8 established that `clio_cae` now reports assimilation failure through its
@@ -171,11 +193,10 @@ case the symptom was silence rather than an error.
 
 ## Caveats
 
-* **Linux cannot verify the fix.** This host has an ambient `~/.clio/clio.yaml`,
-  so it registers targets either way; all 15 `test_cae_comprehensive` cases pass
-  here with the mirror restored, which shows the fix does not regress the
-  configured path but says nothing about the bare one. macOS and Windows CI are
-  the actual check.
+* **Linux could not verify the fix; CI did.** This host has an ambient
+  `~/.clio/clio.yaml`, so it registers targets either way. The 20 local ctest
+  entries passing here showed only that the configured path does not regress.
+  The bare-config path was verified on the runners, as recorded above.
 * `CLIO_TEST_MODE=1` suppresses the `~/.clio/clio.yaml` fallback and looked like
   a local reproduction, but it was not — the failure it produced was
   `ChiMod 'clio_cte_core' not found` from an incomplete build, a different bug.
