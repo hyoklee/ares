@@ -119,7 +119,16 @@ discrepancy under all of them**, with a balanced loading profile (gap 0.18,
 three sensors within 0.02) — which under part 4's own reading is the signature
 of real structure that all five sensors partly resolve, not of one bad sensor.
 Confirming that it corresponds to an actual meteorological feature would need
-ancillary data — a reanalysis field or a cloud product — and has not been done.
+ancillary data — a reanalysis field or a cloud product.
+
+> **Done in
+> [part 13](20260929_claude_terra_fusion_discrepancy_13_reanalysis.md), with a
+> result that cuts against the weather reading.** Congruence *rises* with
+> synoptic activity (cell-averaged rho(|grad T|, C5) = +0.867, p = 0.001), so
+> C5 largely measures scene contrast rather than disturbance. Block 13 does
+> survive as a genuine outlier — residual z = -2.81 after controlling for the
+> thermal gradient — but its dip is sub-grid-scale and its cause is
+> unresolved.
 
 ## Caveats
 
