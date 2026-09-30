@@ -278,6 +278,59 @@ compute node is the tier layout (304 GB on SSD), the node (46 GB RAM vs 94 GB)
 and the source (NFS rather than local XFS). **Which of those matters was not
 isolated**, and one crash is not a characterisation — it is a bug report.
 
+### The crash did not reproduce — and on the retry, the numbers arrived
+
+Four attempts, none of which crashed:
+
+| # | where | how | result |
+| --- | --- | --- | --- |
+| A | login node, 94 GB | `dd` 32 GiB, 304 GB tier | survived, 60 s |
+| B | compute node, 46 GB | `dd` 32 GiB, 304 GB tier | survived, 67 s |
+| C | compute node, 46 GB | **`cp`** a 30 GiB file, 304 GB tier | survived, exit 0, 106 s |
+| D | compute node, 46 GB | **the identical sbatch**, real granule | **staged in 121 s**, benchmark completed |
+
+So it is not the tier size, not the 46 GB node, not `cp`'s write pattern, and
+not the sbatch path. **The abort is intermittent**, and one observation in five
+runs is all the evidence there is. It is recorded here as something seen once,
+not as a characterised bug, and it is not worth an upstream issue in this state:
+"clio_run aborted with heap corruption once while staging 27 GiB, not reproduced
+in four attempts" is not actionable. What would make it actionable is the core
+dump, which was not kept.
+
+[`bin/tf_cliofs_stage_repro.sh`](../bin/tf_cliofs_stage_repro.sh) is the
+reproducer, with the tier layout, node, write size and total as knobs, and a
+per-chunk timeout so a wedged mount reports instead of hanging.
+
+### Compute node, three ways — clio-fs loses to the NFS it fronts
+
+Run D produced what the compute-node job was for. Node-local NVMe baseline, a
+45 GB NVMe tier, and `/mnt/common` over **NFS** as the third arm:
+
+| rep | base (local NVMe) | clio-fs | shared (NFS) |
+| --- | --- | --- | --- |
+| 1 *(cold)* | 10.00 | 14.13 | 12.87 |
+| 2 | 9.58 | 11.01 | 10.25 |
+| 3 | 9.58 | 10.80 | 10.31 |
+
+Steady-state medians: **base 9.58 s, clio-fs 10.90 s, NFS 10.28 s.**
+
+* clio-fs is **+14%** against a node-local copy — consistent with the login
+  node's +15%, on entirely different storage.
+* clio-fs is **+6% slower than simply reading the NFS file directly.**
+
+The second line is the one that matters. This is the configuration a burst
+buffer exists for — a fast node-local tier in front of shared storage — and
+staging the granule into it left reads **slower than not staging at all**, on
+top of 121 s of staging that the direct path never pays.
+
+The reason is the same one the VFD trace gave: `repeated_ranges: 0`. Each byte
+range is read once, so there is nothing for a tier to amortise, and NFS here is
+not slow enough to change that — reading it directly costs only 7% over local
+disk (10.28 vs 9.58), which is less than clio-fs's own overhead.
+
+**A tier can only win when the thing it replaces is slow enough to pay for the
+staging.** On this cluster's NFS, with this access pattern, it is not.
+
 ### A correction: the host does not forbid FUSE
 
 Two earlier mount attempts failed with `fusermount3: mount failed: Operation not
@@ -331,13 +384,14 @@ observed.
   and seven passes is a small sample for a rate.
 * Absolute times drift with load on this shared node — the commits' own note.
   All comparisons here are within one session, interleaved.
-* clio-fs's tier here is 8 GB RAM over a 60 GB file tier on the same XFS the
-  baseline reads from, so its disk tier and the baseline share a device. A
-  node-local SSD tier against NFS — the case the adapter is built for — is what
-  `bin/tf_cliofs_discrepancy.sbatch` exists to measure, and it **crashed the
-  runtime before producing a number** (above), so that case remains unmeasured.
-* The heap corruption is reported as observed, from one run. It was not
-  reproduced, not bisected, and no core was examined.
+* The login-node clio-fs tier shares its XFS device with that baseline. The
+  compute-node run (D) does not — node-local NVMe tier, NFS source — and is the
+  cleaner measurement of the two.
+* The heap corruption is reported as seen ONCE and **not reproduced in four
+  further attempts**. No core was kept, so it was not diagnosed.
+* NFS here costs only 7% over node-local disk, which is a mild shared
+  filesystem. On a congested parallel filesystem, or a working set that does not
+  fit in page cache, the tier could plausibly win; neither was tested.
 * The clio-fs rep-1 figures are cold on both sides and are reported separately
   rather than folded into the median.
 * The VFD sieve sweep is single-run per setting, not replicated. The spread
