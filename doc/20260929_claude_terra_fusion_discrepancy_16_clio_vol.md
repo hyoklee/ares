@@ -1,12 +1,23 @@
-# Terra Fusion 5-sensor discrepancy, part 16: the discrepancy read path through the clio VOL and VFD — VOL slower, VFD at parity
+# Terra Fusion 5-sensor discrepancy, part 16: the discrepancy read path through clio VOL, VFD and clio-fs — none is faster
 
 Run on **ares**, 2026-09-29, against `hyoklee/core` dev at `75706f67` (22
 commits ahead of the tree parts 1-15 used, including the merge of PR #5 and four
 `perf(vol)` commits).
 
-**Answer: performance is not better. The VOL is ~25% slower on this workload
-and its own admission logic independently reaches the same conclusion; the VFD
-is at exact parity and cannot be tuned into a win.**
+**Answer: performance is not better on any of the three paths. The VOL is ~24%
+slower and its own admission logic independently reaches the same conclusion;
+the VFD is at exact parity and cannot be tuned into a win; clio-fs is ~15%
+slower in steady state and 85% slower on a cold first read.**
+
+| path | native (same session) | adapter | delta |
+| --- | --- | --- | --- |
+| clio VOL | 8.88 s | 11.01 s | **+24%** |
+| clio VFD | 9.24 s | 9.24 s | **0%** |
+| clio-fs, steady state | 9.62 s | 11.05 s | **+15%** |
+| clio-fs, first (cold) read | 15.70 s | 29.03 s | **+85%** |
+
+Each row is a within-session median; absolute times drift between sessions on
+this shared node, so only the deltas transfer.
 
 ## Headline
 
@@ -189,6 +200,60 @@ a run to exploit, and between runs the OS page cache already holds the file. The
 chunks — 672 MB of file bytes inflating to the 1318 MiB the application asked
 for, which is the zlib-1 compression measured back in part 1.
 
+## clio-fs: 15% slower in steady state, 85% on the first read
+
+`clio_cte_fuse` presents the CTE as a filesystem, so unlike the VOL and VFD the
+granule must be **staged in first**: 32.9 GB copied through the mount in
+**1m51s (~296 MB/s)**, into an 8 GB RAM tier over a 60 GB file tier. Then the
+same benchmark binary reads it, with the native HDF5 driver — no VOL, no VFD.
+
+| rep | direct | clio-fs |
+| --- | --- | --- |
+| 1 *(cold)* | 15.70 | **29.03** |
+| 2 | 9.90 | 11.25 |
+| 3 | 9.58 | 11.05 |
+| 4 | 9.72 | 11.09 |
+| 5 | 9.62 | 10.95 |
+| 6 | 9.41 | 10.83 |
+
+Steady-state medians (reps 2-6): **9.62 s direct vs 11.05 s clio-fs, +15%**. The
+first read costs **+85%**, and both sides are slow in rep 1 because staging
+32.9 GB evicted the original from page cache.
+
+The penalty is not uniform, and its shape identifies the mechanism:
+
+| phase | direct | clio-fs | delta | character |
+| --- | --- | --- | --- | --- |
+| `modis_band` | 1.49 | 1.78 | **+19%** | 19 granules × 1 partial read |
+| `misr_full` | 4.38 | 4.75 | **+8%** | one large sequential chunk |
+| `modis_geo` | 3.75 | 4.55 | **+21%** | 38 medium reads |
+
+**The cost tracks operation count, not bytes.** The single big sequential read
+pays 8%; the many-small-read phases pay 19-21%. That is FUSE's per-operation
+round trip — every `read()` becomes a userspace context switch — and it is the
+same conclusion the [09-14 study](20260914_claude_terra_fusion_cliofs.md)
+reached on different hardware ("0-36% slower, and the workload is why").
+
+### A correction: the host does not forbid FUSE
+
+Two earlier mount attempts failed with `fusermount3: mount failed: Operation not
+permitted` — on the login node, and again inside a Slurm allocation — and I took
+that for a host policy. **It was not.** The cause is a **libfuse version
+mismatch**: this build links spack's libfuse 3.16.2 while the setuid helper at
+`/usr/bin/fusermount3` is 3.10.5. Preloading the distro library makes the mount
+succeed immediately, on the login node, no allocation needed:
+
+```sh
+LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libfuse3.so.3   clio_cte_fuse $MNT -f
+```
+
+That `LD_PRELOAD` is exactly what `bin/tf_clio_run.sbatch` has carried since
+September, which is where the fix came from. `bin/tf_cliofs_discrepancy.sbatch`
+was written for the compute-node route before the real cause was found; it is
+kept because it is the right harness for a node-local NVMe baseline, but it is
+**not needed for this measurement** and its `/tmp` fallback would have silently
+run the baseline on a 13 GB filesystem against a 32.9 GB granule.
+
 ## What this means for the pipeline
 
 **Keep the discrepancy pipeline on the native path.** Concretely:
@@ -222,7 +287,13 @@ observed.
   and seven passes is a small sample for a rate.
 * Absolute times drift with load on this shared node — the commits' own note.
   All comparisons here are within one session, interleaved.
-* clio-fs was not re-tested against this updated tree; only the VOL and VFD.
+* clio-fs's tier here is 8 GB RAM over a 60 GB file tier on the same XFS the
+  baseline reads from, so its disk tier and the baseline share a device. A
+  node-local NVMe tier against shared storage — the case the adapter is built
+  for — is what `bin/tf_cliofs_discrepancy.sbatch` exists to measure and was
+  not run.
+* The clio-fs rep-1 figures are cold on both sides and are reported separately
+  rather than folded into the median.
 * The VFD sieve sweep is single-run per setting, not replicated. The spread
   (9.29-9.76) is small enough that only the direction — default is best — should
   be read from it, not the exact ordering of the three losers.
