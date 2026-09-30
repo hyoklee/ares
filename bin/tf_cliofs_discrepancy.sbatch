@@ -71,13 +71,20 @@ echo "# space needed : $((NEED_KB/1024/1024)) GiB on node-local scratch (STAGE=$
 LOCAL_ROOT=""
 for cand in ${LOCAL_CANDIDATES:-/mnt/nvme /mnt/local /mnt/scratch /scratch /tmp}; do
   [ -d "$cand" ] || { echo "#   $cand: absent"; continue; }
-  [ -w "$cand" ] || { echo "#   $cand: not writable"; continue; }
-  fstype=$(df -PT "$cand" 2>/dev/null | awk 'NR==2{print $2}')
+  # Probe the path we would ACTUALLY use, not the mount root. /mnt/nvme is
+  # root-owned drwxr-xr-x while /mnt/nvme/hyoklee is the user's and writable,
+  # so testing `-w` on the root alone rejects the one suitable filesystem on
+  # this cluster -- which is exactly what job 24272 did.
+  probe=$cand/$(id -un)
+  if ! mkdir -p "$probe" 2>/dev/null || [ ! -w "$probe" ]; then
+    echo "#   $cand: cannot create or write $probe"; continue
+  fi
+  fstype=$(df -PT "$probe" 2>/dev/null | awk 'NR==2{print $2}')
   case "$fstype" in
     nfs|nfs4|lustre|gpfs|cifs|smb*|fuse.*|beegfs|panfs)
       echo "#   $cand: $fstype is NOT node-local -- skipped"; continue ;;
   esac
-  availkb=$(df -Pk "$cand" 2>/dev/null | awk 'NR==2{print $4}')
+  availkb=$(df -Pk "$probe" 2>/dev/null | awk 'NR==2{print $4}')
   if [ -z "$availkb" ] || [ "$availkb" -lt "$NEED_KB" ]; then
     echo "#   $cand: $fstype, $((availkb/1024/1024)) GiB free < $((NEED_KB/1024/1024)) GiB needed -- skipped"
     continue
@@ -96,7 +103,7 @@ if [ -z "$LOCAL_ROOT" ]; then
   exit 1
 fi
 
-WORK=$LOCAL_ROOT/hyoklee/tf_cliofs_$SLURM_JOB_ID
+WORK=$LOCAL_ROOT/$(id -un)/tf_cliofs_$SLURM_JOB_ID
 MNT=$WORK/mnt; BASE=$WORK/base; TIER=$WORK/tier
 export CLIO_MEMFD_DIR=$WORK/memfd
 
