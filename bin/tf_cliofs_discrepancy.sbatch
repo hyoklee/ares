@@ -45,12 +45,57 @@ REPS=${REPS:-3}
 STAGE=${STAGE:-1}
 PORT=${PORT:-9841}
 
-# Node-local scratch. /mnt/nvme is what tf_clio_run.sbatch used; fall back to
-# /tmp so the job still runs on a node without it rather than silently
-# benchmarking shared storage as if it were local.
-for cand in /mnt/nvme /mnt/local /tmp; do
-  [ -d "$cand" ] && [ -w "$cand" ] && { LOCAL_ROOT=$cand; break; }
+# ---- node-local scratch selection -------------------------------------------
+# A candidate must be writable, NODE-LOCAL, and big enough. The original version
+# of this block checked only the first two of those -- in fact only existence
+# and writability -- and on a node without /mnt/nvme it fell through to /tmp,
+# which on ares-comp-31 is a 13 GB ext4 root. Against a 32.9 GB granule that
+# either dies mid-copy or, worse, leaves a truncated file that still opens far
+# enough to produce timings. Two further faults in the same three lines: a
+# shared filesystem would have been accepted silently, making the "node-local
+# baseline" a measurement of the network instead; and LOCAL_ROOT was never
+# initialised, so under `set -u` a total miss crashed with an unbound-variable
+# error rather than saying what was wrong.
+#
+# Space needed: STAGE=1 writes the granule TWICE under $WORK -- once as the
+# node-local baseline copy, once into the clio tier -- so budget 2x plus 10%.
+GRAN_BYTES=$(stat -c %s "$GRAN" 2>/dev/null) || { echo "!!! cannot stat $GRAN"; exit 1; }
+if [ "$STAGE" = "1" ]; then
+  NEED_KB=$(( GRAN_BYTES / 1024 * 22 / 10 ))
+else
+  NEED_KB=$(( GRAN_BYTES / 1024 * 11 / 10 ))
+fi
+echo "# granule      : $((GRAN_BYTES/1024/1024/1024)) GiB"
+echo "# space needed : $((NEED_KB/1024/1024)) GiB on node-local scratch (STAGE=$STAGE)"
+
+LOCAL_ROOT=""
+for cand in ${LOCAL_CANDIDATES:-/mnt/nvme /mnt/local /mnt/scratch /scratch /tmp}; do
+  [ -d "$cand" ] || { echo "#   $cand: absent"; continue; }
+  [ -w "$cand" ] || { echo "#   $cand: not writable"; continue; }
+  fstype=$(df -PT "$cand" 2>/dev/null | awk 'NR==2{print $2}')
+  case "$fstype" in
+    nfs|nfs4|lustre|gpfs|cifs|smb*|fuse.*|beegfs|panfs)
+      echo "#   $cand: $fstype is NOT node-local -- skipped"; continue ;;
+  esac
+  availkb=$(df -Pk "$cand" 2>/dev/null | awk 'NR==2{print $4}')
+  if [ -z "$availkb" ] || [ "$availkb" -lt "$NEED_KB" ]; then
+    echo "#   $cand: $fstype, $((availkb/1024/1024)) GiB free < $((NEED_KB/1024/1024)) GiB needed -- skipped"
+    continue
+  fi
+  echo "#   $cand: $fstype, $((availkb/1024/1024)) GiB free -- SELECTED"
+  LOCAL_ROOT=$cand; LOCAL_AVAIL_KB=$availkb; break
 done
+
+if [ -z "$LOCAL_ROOT" ]; then
+  echo "!!! no node-local filesystem with $((NEED_KB/1024/1024)) GiB free."
+  echo "!!! Refusing to run: a smaller or shared filesystem would silently"
+  echo "!!! benchmark the wrong thing. Options:"
+  echo "!!!   STAGE=0            reuse an already-staged tier (halves the need)"
+  echo "!!!   LOCAL_CANDIDATES=  point at a suitable path explicitly"
+  echo "!!!   -w <node>          pick a node that has one"
+  exit 1
+fi
+
 WORK=$LOCAL_ROOT/hyoklee/tf_cliofs_$SLURM_JOB_ID
 MNT=$WORK/mnt; BASE=$WORK/base; TIER=$WORK/tier
 export CLIO_MEMFD_DIR=$WORK/memfd
@@ -77,14 +122,19 @@ trap cleanup EXIT
 mkdir -p "$MNT" "$BASE" "$TIER" "$CLIO_MEMFD_DIR" || exit 1
 
 # ---- runtime config: 8 GB RAM tier + 60 GB node-local disk tier -------------
-python3 - "$P/data/clio_default.yaml" "$WORK/rt.yaml" "$TIER/cte_disk.dat" "$PORT" <<'PY'
+# Disk tier sized from what the selected filesystem actually has, less the
+# baseline copy, rather than a fixed 60 GB that may not exist there.
+DISK_TIER_GB=${DISK_TIER_GB:-$(( (LOCAL_AVAIL_KB/1024/1024 - GRAN_BYTES/1024/1024/1024) * 9 / 10 ))}
+[ "$DISK_TIER_GB" -lt 1 ] && DISK_TIER_GB=1
+echo "# disk tier    : ${DISK_TIER_GB} GB at $TIER"
+python3 - "$P/data/clio_default.yaml" "$WORK/rt.yaml" "$TIER/cte_disk.dat" "$PORT" "$DISK_TIER_GB" <<'PY'
 import re, sys
-src, dst, tierpath, port = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+src, dst, tierpath, port, tiergb = sys.argv[1:6]
 s = open(src).read()
 s = s.replace('capacity: "0g"', 'capacity: "8GB"', 1)
 s = s.replace('capacity_limit: "0g"', 'capacity_limit: "8GB"', 1)
 s = s.replace('${HOME}/.clio/cte_disk_tier.dat', tierpath)
-s = s.replace('capacity_limit: "10GB"', 'capacity_limit: "60GB"', 1)
+s = s.replace('capacity_limit: "10GB"', 'capacity_limit: "%sGB"' % tiergb, 1)
 s = re.sub(r'^(\s*port:)\s*9413', r'\g<1> ' + port, s, count=1, flags=re.M)
 open(dst, 'w').write(s)
 PY
