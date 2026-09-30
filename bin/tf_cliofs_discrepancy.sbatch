@@ -159,7 +159,19 @@ grep -q "pools created successfully" "$RTLOG" || { echo "!!! runtime failed"; ta
 
 echo "# --- mount clio-fs"
 FLOG=$WORK/fuse.log
-setsid nohup "$FUSE_BIN" "$MNT" > "$FLOG" 2>&1 &
+# LD_PRELOAD the DISTRO libfuse3. This build links spack's libfuse 3.16.2 while
+# the setuid helper at /usr/bin/fusermount3 is 3.10.5, and the version mismatch
+# makes the mount fail with "fusermount3: mount failed: Operation not
+# permitted" -- which reads like a privilege problem and is not one. This is
+# the same LD_PRELOAD tf_clio_run.sbatch has carried since September.
+DISTRO_FUSE=${DISTRO_FUSE:-/usr/lib/x86_64-linux-gnu/libfuse3.so.3}
+if [ -e "$DISTRO_FUSE" ]; then
+  echo "# preloading $DISTRO_FUSE (spack libfuse would fail with EPERM)"
+  export LD_PRELOAD=$DISTRO_FUSE
+else
+  echo "# WARNING: $DISTRO_FUSE absent; mount may fail with a misleading EPERM"
+fi
+setsid nohup "$FUSE_BIN" "$MNT" -f > "$FLOG" 2>&1 &
 for i in $(seq 1 60); do
   mount | grep -q "$MNT" && { echo "# mounted after ${i}s"; break; }
   sleep 1
@@ -175,6 +187,10 @@ if [ "$STAGE" = "1" ]; then
   echo "# clio-fs stage: $((SECONDS-t0))s"
 fi
 ls -la "$MNT" | head -3
+
+# The preload was only needed to mount; drop it so the benchmark runs in the
+# same library environment as the login-node VOL/VFD measurements.
+unset LD_PRELOAD
 
 echo
 echo "# ==== interleaved A/B/C, $REPS reps ===="
