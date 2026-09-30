@@ -13,7 +13,12 @@
 #
 #   base    node-local copy of the granule          (the honest baseline)
 #   cliofs  the same bytes staged into clio-fs      (what is being tested)
-#   shared  /mnt/common original                    (context only)
+#   shared  /mnt/common original                    (what clio-fs would replace)
+#
+# On a COMPUTE node /mnt/common is NFS (172.25.1.1:/mnt/common), not the local
+# xfs it is on the login node. That makes the third arm the realistic case for
+# a burst buffer -- shared storage is what a tier exists to sit in front of --
+# rather than the afterthought it was on the login node.
 #
 # The baseline reads a NODE-LOCAL copy, not /mnt/common: comparing a clio
 # RAM/NVMe tier against shared storage would measure the network, not the tier.
@@ -69,7 +74,12 @@ echo "# granule      : $((GRAN_BYTES/1024/1024/1024)) GiB"
 echo "# space needed : $((NEED_KB/1024/1024)) GiB on node-local scratch (STAGE=$STAGE)"
 
 LOCAL_ROOT=""
-for cand in ${LOCAL_CANDIDATES:-/mnt/nvme /mnt/local /mnt/scratch /scratch /tmp}; do
+# Ordered fastest-first. /mnt/ssd and /mnt/hdd were missing from this list and
+# are the only node-local filesystems on ares compute nodes big enough for the
+# 2x granule this job writes: ares-comp-19 has nvme 81 GiB, ssd 474 GiB, hdd
+# 819 GiB. nvme alone is marginal and was below the bar on the node job 24274
+# landed on (47 GiB free).
+for cand in ${LOCAL_CANDIDATES:-/mnt/nvme /mnt/ssd /mnt/hdd /mnt/local /mnt/scratch /scratch /tmp}; do
   [ -d "$cand" ] || { echo "#   $cand: absent"; continue; }
   # Probe the path we would ACTUALLY use, not the mount root. /mnt/nvme is
   # root-owned drwxr-xr-x while /mnt/nvme/hyoklee is the user's and writable,
