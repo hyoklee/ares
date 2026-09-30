@@ -1,11 +1,12 @@
-# Terra Fusion 5-sensor discrepancy, part 16: the discrepancy read path through the clio VOL — slower, and the connector agrees
+# Terra Fusion 5-sensor discrepancy, part 16: the discrepancy read path through the clio VOL and VFD — VOL slower, VFD at parity
 
 Run on **ares**, 2026-09-29, against `hyoklee/core` dev at `75706f67` (22
 commits ahead of the tree parts 1-15 used, including the merge of PR #5 and four
 `perf(vol)` commits).
 
-**Answer: performance is not better. The VOL is ~25% slower on this workload,
-and its own admission logic independently reaches the same conclusion.**
+**Answer: performance is not better. The VOL is ~25% slower on this workload
+and its own admission logic independently reaches the same conclusion; the VFD
+is at exact parity and cannot be tuned into a win.**
 
 ## Headline
 
@@ -21,6 +22,11 @@ and its own admission logic independently reaches the same conclusion.**
   8.88 s (**1.44×**), MISR alone 2.10 s vs 3.79 s (**1.8×**) — **but it served on
   only 1 of 7 passes**, with the blobs demonstrably still resident in the tier on
   the passes that missed.
+* **The VFD costs nothing and gains nothing**: median **9.24 s** against native
+  **9.24 s**. Its default 64 KiB sieve is already optimal — 1 MiB, 16 MiB and
+  sieve-off are all *worse* — and `CLIO_VFD_READ_TIER=1` costs 15-37%.
+* **The VFD's own trace says why no cache can help**: `repeated_ranges: 0,
+  distinct_ranges: 685`. Nothing is read twice in a pass.
 
 ## Why the Python pipeline could not be used directly
 
@@ -129,12 +135,69 @@ the tag whenever its coherence verdict is not `kMatched`, and the new
 rest of the file. **Whether that is what fires here was not traced**, and it
 should not be cited as the cause without that work.
 
+## The VFD: parity, and not tunable upward
+
+`HDF5_DRIVER=clio_vfd` sits below the VOL, at byte altitude. Same benchmark, same
+interleaving, its own session (native drifted to 9.24 s here — absolute times are
+not comparable across sessions, only within):
+
+| rep | native | clio_vfd |
+| --- | --- | --- |
+| 1 | 9.26 | 9.52 |
+| 2 | 9.24 | 9.24 |
+| 3 | 9.24 | 9.23 |
+
+Medians **9.24 s vs 9.24 s — exact parity.** Only the first VFD pass is slower
+(9.52), consistent with a one-off first-touch cost. Where the VOL costs 24% to
+route every call, the VFD's pass-through is free.
+
+### Tuning does not help
+
+The trace shows a scattered small-read pattern, which is what a coalescing
+window exists for, so the `sieve` knob is the obvious lever:
+
+| `HDF5_DRIVER_CONFIG` | modis_band | misr_full | modis_geo | TOTAL |
+| --- | --- | --- | --- | --- |
+| *(default, 64 KiB)* | 1.49 | 3.98 | 3.82 | **9.29** |
+| `sieve=1048576` | 1.49 | 4.43 | 3.85 | 9.76 |
+| `sieve=16777216` | 1.47 | 4.29 | 3.83 | 9.59 |
+| `sieve=0` (off) | 1.49 | 4.22 | 3.79 | 9.50 |
+
+**The 64 KiB default is already the best of these**, and every change is worse.
+Turning coalescing off costs 2%; widening it costs 3-5%, since the window bounds
+a per-call scratch allocation that then goes mostly unused.
+
+`CLIO_VFD_READ_TIER=1`, which lets reads be served from the tier, is worse
+still — 12.71 s, 10.59 s, 10.96 s across three passes, all above native's 9.24 s.
+
+### Why no cache can help this workload
+
+The VFD trace is the clearest statement of the structural problem, because it
+sees byte ranges the VOL cannot:
+
+```
+totals:        reads 685, writes 0, read_bytes 672,395,980
+request_size:  lt_1k 566 | 1k_4k 59 | 4k_64k 2 | ge_1m 58
+locality:      sequential 42, scattered 643
+repeat:        repeated_ranges 0, distinct_ranges 685
+```
+
+**`repeated_ranges: 0`.** Across a full pass over the granule, not one byte range
+is read twice. A burst tier is a reuse device; this pipeline has no reuse within
+a run to exploit, and between runs the OS page cache already holds the file. The
+566 sub-kilobyte reads are HDF5 metadata, and the 58 reads ≥1 MiB are the
+chunks — 672 MB of file bytes inflating to the 1318 MiB the application asked
+for, which is the zlib-1 compression measured back in part 1.
+
 ## What this means for the pipeline
 
 **Keep the discrepancy pipeline on the native path.** Concretely:
 
 * As shipped and configured by default, the VOL costs 24% and returns nothing on
   this workload, because a read-only pipeline never triggers write admission.
+* The VFD is free but also does nothing here. It is the right choice if a clio
+  data path is wanted for other reasons — telemetry, or a future tier-backed
+  deployment — since it costs nothing to leave in place.
 * The gate's refusal is correct for a local XFS file. Parts 10-15 re-read this
   granule dozens of times, which *sounds* like the reuse case a tier exists for
   — but the reuse is being served by the OS page cache already, which is what
@@ -159,8 +222,10 @@ observed.
   and seven passes is a small sample for a rate.
 * Absolute times drift with load on this shared node — the commits' own note.
   All comparisons here are within one session, interleaved.
-* The VFD and clio-fs paths were not re-tested against this updated tree; only
-  the VOL.
+* clio-fs was not re-tested against this updated tree; only the VOL and VFD.
+* The VFD sieve sweep is single-run per setting, not replicated. The spread
+  (9.29-9.76) is small enough that only the direction — default is best — should
+  be read from it, not the exact ordering of the three losers.
 * `CLIO_VOL_ADMIT_COST=0` is a test-suite override, not a supported production
   setting. The 1.44× figure is what the hardware can do, not a configuration
   recommendation.
