@@ -234,6 +234,50 @@ round trip — every `read()` becomes a userspace context switch — and it is t
 same conclusion the [09-14 study](20260914_claude_terra_fusion_cliofs.md)
 reached on different hardware ("0-36% slower, and the workload is why").
 
+### On a compute node, staging into clio-fs crashes the runtime
+
+The login-node figures above are the only clio-fs timings this part has, because
+the compute-node run never reached the benchmark. Job 24279 on **ares-comp-10**
+selected `/mnt/ssd` (368 GiB free), sized a 304 GB disk tier, brought the
+runtime up in 11 s, mounted in 2 s, copied the granule to node-local storage in
+80 s — and then hung for an hour staging it into clio-fs.
+
+`clio_run` had **aborted**:
+
+```
+corrupted size vs. prev_size
+741057 Aborted (core dumped)   clio_run start
+```
+
+`corrupted size vs. prev_size` is glibc's heap-corruption check. The tier file
+had reached **28,991,029,248 bytes (~27 GiB)** of the 32.9 GB transfer. There is
+no OOM record in `dmesg`, and the node has 46 GB with an 8 GB RAM tier, so this
+is memory corruption rather than exhaustion.
+
+**The failure mode is worse than the crash.** With the runtime gone, the FUSE
+daemon looped on
+
+```
+Recv(SHM): Server dead, attempting reconnect...
+ReconnectToOriginalHost: Attempting to reconnect to restarted server
+```
+
+and `cp` blocked for **59 minutes** with the node at load 0.00 — everything
+asleep, nothing making progress, an exclusive node held for an hour. An `ls` on
+the mountpoint also hung, which is the usual signature of a FUSE filesystem
+whose backend has died. Only on teardown did `cp` report
+`Software caused connection abort`.
+
+So a runtime crash mid-stage does not surface as a failed transfer; it surfaces
+as an indefinite hang. **Anything driving clio-fs unattended wants a timeout on
+the staging step**, because the client will not time out on its own.
+
+This was not reached on the login node, where the same 32.9 GB staged in 1m51s
+against an 8 GB RAM tier plus a 60 GB file tier on XFS. What differs on the
+compute node is the tier layout (304 GB on SSD), the node (46 GB RAM vs 94 GB)
+and the source (NFS rather than local XFS). **Which of those matters was not
+isolated**, and one crash is not a characterisation — it is a bug report.
+
 ### A correction: the host does not forbid FUSE
 
 Two earlier mount attempts failed with `fusermount3: mount failed: Operation not
@@ -289,9 +333,11 @@ observed.
   All comparisons here are within one session, interleaved.
 * clio-fs's tier here is 8 GB RAM over a 60 GB file tier on the same XFS the
   baseline reads from, so its disk tier and the baseline share a device. A
-  node-local NVMe tier against shared storage — the case the adapter is built
-  for — is what `bin/tf_cliofs_discrepancy.sbatch` exists to measure and was
-  not run.
+  node-local SSD tier against NFS — the case the adapter is built for — is what
+  `bin/tf_cliofs_discrepancy.sbatch` exists to measure, and it **crashed the
+  runtime before producing a number** (above), so that case remains unmeasured.
+* The heap corruption is reported as observed, from one run. It was not
+  reproduced, not bisected, and no core was examined.
 * The clio-fs rep-1 figures are cold on both sides and are reported separately
   rather than folded into the median.
 * The VFD sieve sweep is single-run per setting, not replicated. The spread
