@@ -1,0 +1,34 @@
+# OMNI job: re-fetch Terra Fusion granule O10670 from the AWS public bucket
+# through CAE, after the local copy was found corrupt.
+#
+# The local file at
+#   /mnt/common/datasets-staging/TERRA_BF_L1B_O10670_20011220010522_F000_V001.h5
+# cannot be opened: its root group object header continuation chunk has been
+# overwritten with compressed data, and it carries 229.1 MiB appended past the
+# true end of file. See
+# doc/20261001_claude_terra_fusion_O10670_corruption.md
+#
+# The authoritative object is public and anonymous, from
+# https://registry.opendata.aws/terrafusion/ :
+#
+#   bucket  terrafusiondatasampler        region  us-west-2
+#   key     P108/TERRA_BF_L1B_O10670_20011220010522_F000_V001.h5
+#   size    45,133,547,913 bytes   <- matches this file's own superblock EOF
+#   etag    "f53ace0cff68db0a4888c248c932bca3-5381"  (multipart, 5381 parts)
+#
+# Run with:
+#   export CAE_S3_TOOL=$HOME/src/hyoklee/ares/bin/tf_cae_s3_tool.sh
+#   export TF_S3_KEEP=/mnt/common/hyoklee/tfwork/s3fetch/O10670_FROM_S3.h5
+#   clio_cae bin/tf_o10670_s3.omni.yaml
+#
+# The CTE tier must be able to hold 45 GB; size the runtime's storage before
+# running, or the ingest fails partway with PutBlob errors (part 8).
+version: "1.0"
+transfers:
+  - name: "o10670_refetch"
+    src: "s3://terrafusiondatasampler/P108/TERRA_BF_L1B_O10670_20011220010522_F000_V001.h5"
+    dst: "iowarp::terra_O10670_s3"
+    format: "binary"
+    depends_on: ""
+    range_off: 0
+    range_size: 0

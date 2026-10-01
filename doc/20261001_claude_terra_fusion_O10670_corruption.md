@@ -7,16 +7,19 @@ because nothing could open it.
 
 ## Headline
 
-* **The root group's object header continuation chunk has been overwritten with
-  compressed data.** HDF5 fails at `H5O__chunk_deserialize(): message not
-  aligned`, before any dataset can be reached.
-* **The superblock's EOF is stale by 229 MiB.** It says the file ends at
-  45,133,547,913; the file is 45,373,827,465 bytes.
+* **A resumed transfer duplicated 229.15 MiB**, inserting it at offset
+  30,721,900,544. Everything after is intact but **shifted**, so HDF5's internal
+  addresses miss their targets and it fails at
+  `H5O__chunk_deserialize(): message not aligned`. Nothing is overwritten.
+* **The superblock is CORRECT.** It says the file ends at 45,133,547,913 — and
+  the authoritative copy in AWS S3 is **exactly 45,133,547,913 bytes**. The local
+  file is 45,373,827,465, larger by precisely the duplicated run.
 * **The file is not truncated.** Its last 4 KiB hold a complete, readable
   provenance manifest listing the MOD021KM/MOD03 source granules for
-  **A2001354** — day 354 of 2001, i.e. 2001-12-20, which matches the orbit.
-* Together these say the file was **captured or copied while still being
-  written**, or its writer died before the closing metadata flush.
+  **A2001354** — day 354 of 2001, matching the orbit. That trailer is genuine;
+  it has merely been displaced 229 MiB by the insertion.
+* The source in S3 is **intact**. Only this local copy is damaged, and only by
+  duplication.
 * **Separately, and worth reporting upstream: `h5ls` on this file is OOM-killed
   rather than erroring.** A corrupt message length becomes an unbounded
   allocation. With `RLIMIT_AS` set it fails cleanly instead.
@@ -113,16 +116,112 @@ from, for **A2001354** = 2001-12-20, matching O10670's date. So the 229 MiB
 beyond the declared EOF is **real content, correctly terminated** — the file was
 not cut short.
 
-## What this means
+## RESOLVED: 229 MiB duplicated by a resumed transfer
 
-The combination — stale superblock EOF, root metadata overwritten by raw data,
-and a complete trailer — points at the file being **snapshotted or copied while
-the writer was still running**, or the writer dying before its final metadata
-flush. HDF5 updates the superblock and object headers at close; a file captured
-mid-write carries an older EOF, and metadata the writer had not yet relocated
-can be sitting under space since reused for raw data.
+Comparing against the authoritative S3 object by byte range settles the whole
+thing, and it is a tidier fault than the symptoms suggested.
 
-**It is not recoverable in place.** Reconstructing a root group object header
+**The local file is the S3 file with 240,279,552 bytes inserted at offset
+30,721,900,544, and that inserted block is a byte-identical copy of the
+229.15 MiB immediately preceding it.**
+
+Established by range comparison against `s3://terrafusiondatasampler`:
+
+| region | local vs S3 |
+| --- | --- |
+| superblock (0, 512 B) | **identical** |
+| 1 GiB in | **identical** |
+| 10 GiB in | **identical** |
+| 25 GiB in | **identical** |
+| 40 GiB in | differs |
+| root continuation chunk | differs — S3 has `10 00 10 00 …`, the valid message |
+| last 4 KiB of the true file | differs |
+
+and then, decisively:
+
+| test | result |
+| --- | --- |
+| `local[x + 240,279,552] == s3[x]` at 40 GiB, 42 GiB, the root chunk, and true EOF−4K | **MATCH at every one** |
+| first differing byte | **30,721,900,544** (0x7272B0000) |
+| `local[first_diff + shift] == s3[first_diff]` | **YES — a pure insertion** |
+| `inserted[0:4096] == local[30,481,620,992]` | **YES** — and 30,481,620,992 = insertion point − 240,279,552 |
+
+The inserted run is an exact duplicate of the block that precedes it. The
+insertion point is 64 KiB-aligned and the length is exactly 58,662 × 4 KiB
+pages. That is the signature of a **transfer that resumed from a checkpoint
+229 MiB back and re-sent that span instead of seeking** — not storage rot, not a
+bad source.
+
+### Why this looked like overwritten metadata
+
+Nothing is overwritten. Everything after the insertion is **intact but shifted
+by +240,279,552 bytes**. HDF5's internal addresses still point where the objects
+used to be, so the root group's continuation pointer — correct for the original
+layout — now lands 229 MiB short of the real chunk and reads whatever raw data
+happens to sit there. The "message not aligned" error is the downstream symptom
+of a shift, not of damage at that location.
+
+The same explains the trailer: the ASCII provenance manifest really is the last
+4 KiB of the genuine file, and in the local copy it has simply been pushed
+240 MB further out.
+
+**The file is therefore repairable in principle** — excising
+`[30,721,900,544, 30,962,180,096)` would reproduce the original byte for byte.
+Re-downloading is simpler and carries no risk of a second mistake, so that is
+what was done; the corrupt copy is preserved unmodified as evidence.
+
+## CORRECTION: the superblock was right, the copy is wrong
+
+This note first concluded that the superblock's EOF was *stale* and inferred a
+file "captured mid-write". **That was wrong**, and checking the authoritative
+copy settles it.
+
+The dataset is public on AWS S3 (`s3://terrafusiondatasampler`, `us-west-2`), and
+a `HEAD` on the object gives:
+
+```
+Key:            P108/TERRA_BF_L1B_O10670_20011220010522_F000_V001.h5
+Content-Length: 45133547913
+ETag:           "f53ace0cff68db0a4888c248c932bca3-5381"
+Last-Modified:  Fri, 06 Dec 2019 03:33:34 GMT
+```
+
+**45,133,547,913 is exactly the EOF this file's own superblock declares.** The
+superblock is not stale; it is correct, and it has been correct all along. The
+authoritative file is 45,133,547,913 bytes and the local copy is 45,373,827,465
+— **229.1 MiB of bytes that do not belong to the file have been appended to it.**
+
+That reverses the reading:
+
+| | first inference (wrong) | what S3 shows |
+| --- | --- | --- |
+| superblock EOF | stale, writer never flushed | **correct** |
+| extra 229 MiB | legitimate content past a stale marker | **garbage appended to a complete file** |
+| cause | source captured mid-write | **the local copy is damaged** |
+| the ASCII trailer | proof the file was complete | it is from the appended region, not the real file |
+
+The corruption is not confined to the tail either: the clobbered root
+continuation chunk sits at 45,131,496,033, which is **inside** the authoritative
+45,133,547,913-byte range, about 2 MB before the true end. So this copy has both
+extra bytes appended *and* interior bytes overwritten — the signature of a
+botched transfer, not of a bad source file.
+
+**What this means practically:** the archive copy is almost certainly fine, and
+re-downloading is not merely the best option, it is expected to work. The S3
+object's own size matching the superblock is the strongest evidence available
+that the source is intact.
+
+### What the earlier reasoning got wrong
+
+The inference chain was: EOF mismatch → superblock stale → writer crashed. Every
+step was plausible and the conclusion was still wrong, because the chain never
+checked the one external fact that could decide it — how big the file is
+*supposed* to be. The ASCII trailer was then read as confirming evidence
+("complete manifest, so not truncated"), when it is in fact part of the appended
+garbage. A finding that explains everything and is checkable against an
+authority should be checked against that authority before it is written down.
+
+**It is still not recoverable in place.** Reconstructing a root group object header
 from the surrounding data is not a supported operation, and `h5clear` only
 resets status flags — it cannot repair a corrupt header. The file should be
 re-fetched from the Terra Fusion archive.
