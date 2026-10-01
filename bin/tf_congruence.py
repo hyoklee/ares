@@ -17,7 +17,9 @@ TAG=os.environ.get('TF_TAG', os.path.basename(NPZ)[len('regrid_inputs'):].lstrip
 D=np.load(NPZ, allow_pickle=True); SRC={k:D[k] for k in D.files}
 blocks=json.load(open('aster_blocks.json'))
 import netCDF4
-F='/mnt/common/datasets-staging/TERRA_BF_L1B_O10204_20011118010522_F000_V001.h5'
+import os as _os
+F=_os.environ.get('TF_GRANULE',
+  '/mnt/common/datasets-staging/TERRA_BF_L1B_O10204_20011118010522_F000_V001.h5')
 d=netCDF4.Dataset(F)
 RES=float(os.environ.get('TF_RES','0.02')); PAD=0.05
 # Per-sensor search radius matched to NATIVE FOOTPRINT. A uniform 3 km radius

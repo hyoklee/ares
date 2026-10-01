@@ -117,10 +117,19 @@ T['read_CERES'] = time.time() - t
 
 # ---- MOPITT ----------------------------------------------------------------
 t = time.time()
-G = d['MOPITT']['granule_20011118']['Geolocation']
+# The MOPITT granule group is named for the DATE, so it differs per orbit.
+# Hardcoding one name silently restricted this script to a single granule.
+_mop = None
+for _gn, _g in d['MOPITT'].groups.items():
+    if 'Geolocation' in _g.groups and 'Data_Fields' in _g.groups:
+        _mop = _g
+        break
+if _mop is None:
+    raise SystemExit('no MOPITT granule with Geolocation+Data_Fields in ' + F)
+G = _mop['Geolocation']
 la = np.asarray(G['Latitude'][:], 'f8'); lo = np.asarray(G['Longitude'][:], 'f8')
 m = ok(la, lo) & (la >= LA0) & (la <= LA1) & (lo >= LO0) & (lo <= LO1)
-MR = d['MOPITT']['granule_20011118']['Data_Fields']['MOPITTRadiances']
+MR = _mop['Data_Fields']['MOPITTRadiances']
 v = np.asarray(MR[:, :, :, MOPITT_CHAN, MOPITT_STATE], 'f8')   # only 4..7 hold data
 m &= vmask(MR, v)
 SRC['MOPITT'] = (la[m], lo[m], v[m]); T['read_MOPITT'] = time.time() - t

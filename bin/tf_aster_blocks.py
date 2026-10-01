@@ -1,5 +1,7 @@
 import netCDF4, numpy as np, json, time
-F='/mnt/common/datasets-staging/TERRA_BF_L1B_O10204_20011118010522_F000_V001.h5'
+import os as _os
+F=_os.environ.get('TF_GRANULE',
+  '/mnt/common/datasets-staging/TERRA_BF_L1B_O10204_20011118010522_F000_V001.h5')
 d=netCDF4.Dataset(F); t0=time.time()
 rows=[]
 for gn,g in sorted(d['ASTER'].groups.items()):
