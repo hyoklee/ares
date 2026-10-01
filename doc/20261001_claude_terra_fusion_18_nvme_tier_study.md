@@ -95,11 +95,19 @@ The 30.6 GB stage itself reported success (194 s). So clio-fs served a file that
 came back readable at the superblock level and empty underneath.
 
 That is a data-integrity symptom, not a slow one, and it is more serious than
-any timing in this table. It was not pursued here: the job cleaned up its
-scratch on exit, so the staged copy is gone, and reproducing it needs a run that
-preserves the mount. **No clio-fs performance number should be quoted from this
-study**, and the part 16 figures (+15% steady state) remain the only ones
-measured against a verified-correct read.
+any timing in this table.
+
+> **PURSUED AND REPRODUCED**, see
+> [clio-fs silently returns wrong data](20261001_claude_cliofs_silent_corruption.md).
+> Files written through a clio-fs mount come back with the **correct size and
+> wrong content** — 5 of 10 in the packaged reproducer, with `cp` exiting 0 and
+> zero errors logged anywhere. Exactly one 1 MiB CTE page is damaged per
+> occurrence, with a 128 KiB sub-block duplicated inside it. Not tier
+> exhaustion: it reproduces on a 200 GB tier holding 9.7 GB.
+
+**No clio-fs performance number should be quoted from this study.** Part 16's
+figures (+15% steady state) were also never content-verified, so they carry the
+same caveat now.
 
 ## So what IS the optimal way to use NVMe here?
 
