@@ -4,6 +4,17 @@ Run on **ares**, 2026-09-30. Extends parts 1-16, which studied one orbit, to
 every Terra Fusion granule on this machine: 284 GB, 10 files, 2000-03-04 to
 2002-03-26.
 
+> **UPDATED 2026-10-01 — now 315 blocks from 7 granules.** O10670 was recovered
+> from AWS S3 (its local copy had a duplicated 229 MiB run, see
+> [the forensics note](20261001_claude_terra_fusion_O10670_corruption.md)),
+> promoted into `datasets-staging`, and the study re-run. **The answer below is
+> unchanged.** O10670 adds 52 blocks and has the *lowest median* of any granule
+> (0.659), and two of its blocks entered the raw top three — but both are
+> **featureless** (BT₃₁ sd 1.06 K and 0.50 K, Antarctic ice at 251-259 K) and
+> drop on the contrast floor. Its genuine contributions enter at ranks 5 and 6.
+> The per-granule and collection tables below are superseded by the
+> [315-block section](#the-315-block-re-run-7-granules) at the end.
+
 ## Answer
 
 **O11602 block 46 — 25.84°S to 25.17°S, 122.91°E to 123.75°E** (inland Western
@@ -184,3 +195,83 @@ TOP=20 python3 bin/tf_rank_all.py                 # -> all_granule_ranking.json
 `TF_GRANULE`; `tf_sources.py` also discovers the MOPITT granule group by
 structure rather than by the hardcoded `granule_20011118`, which had silently
 restricted the whole pipeline to one orbit.
+
+---
+
+## The 315-block re-run (7 granules)
+
+With O10670 recovered and promoted, the collection is **315 blocks from 7
+granules** — 268 of them above the 2.0 K contrast floor.
+
+| orbit | blocks | C₅ min | median | max |
+| --- | --- | --- | --- | --- |
+| O10204 | 32 | 0.508 | 0.720 | 0.867 |
+| **O10670** | **52** | **0.425** | **0.659** | 0.872 |
+| O10903 | 75 | 0.481 | 0.703 | 0.920 |
+| O11136 | 27 | 0.509 | 0.704 | 0.827 |
+| O11369 | 66 | 0.374 | 0.701 | 0.887 |
+| O11602 | 49 | **0.355** | 0.692 | 0.891 |
+| O11835 | 14 | 0.585 | 0.738 | 0.882 |
+
+| | |
+| --- | --- |
+| C₅ | min 0.355, median 0.699, max 0.920 |
+| C₅ vs Kendall's W | **r = 0.9892** across 315 blocks |
+| Spearman(BT₃₁ sd, C₅) | **+0.505, p = 8.4 × 10⁻²²** |
+| featureless (sd < 1.0 K) | 20 blocks |
+| below the 2.0 K floor | 47 blocks |
+| weakest-sensor tally (filtered) | MISR 111, MOPITT 99, CERES 57, ASTER 1, **MODIS 0** |
+
+### The contrast filter mattered more than before
+
+**Eight of the raw top ten are featureless and drop**, including *both* new
+O10670 blocks:
+
+| raw rank | | C₅ | BT₃₁ sd | verdict |
+| --- | --- | --- | --- | --- |
+| 0 | O11602 blk 46 | 0.355 | 3.29 | **kept** |
+| 1 | O11369 blk 14 | 0.374 | 0.42 | dropped |
+| 2 | **O10670 blk 31** | 0.425 | **1.06** | dropped — Antarctic, 251.3 K |
+| 3 | **O10670 blk 43** | 0.430 | **0.50** | dropped — Antarctic, 258.9 K |
+| 4 | O11369 blk 10 | 0.444 | 0.48 | dropped |
+| 5 | O11369 blk 26 | 0.449 | 4.04 | **kept** |
+| 6-9 | O11369 blk 13, 11, 0, 15 | 0.450-0.458 | 0.52-1.40 | dropped |
+
+O10670's two entries are at **69.9°S / 101.7°E** and **76.0°S / −25.2°E** — ice
+sheet, uniform to within half a kelvin. They would have been reported as the
+second and third most discrepant blocks in the collection on the raw ranking
+alone. This is the third time the same trap has been avoided only by checking
+contrast, and the first time a *newly added* granule walked straight into it.
+
+### Top 12 after filtering
+
+| rk | orbit | blk | lat | lon | C₅ | sd K | BT K | cells | weakest | gap |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | **O11602** | **46** | −25.84, −25.17 | 122.91 | **0.355** | 3.29 | 303.6 | 1089 | MISR | 0.45 |
+| 1 | O11369 | 26 | 0.60, 1.26 | 130.90 | 0.449 | 4.04 | 292.8 | 982 | MISR | 0.57 |
+| 2 | O10903 | 65 | −14.39, −13.73 | 127.72 | 0.481 | 8.68 | 286.7 | 1013 | MISR | 0.38 |
+| 3 | O10903 | 71 | −17.60, −16.94 | 127.01 | 0.485 | 3.52 | 300.9 | 1026 | MISR | 0.54 |
+| 4 | O10903 | 72 | −18.13, −17.47 | 126.90 | 0.493 | 3.28 | 302.2 | 1030 | CERES | 0.34 |
+| 5 | **O10670** | **22** | 33.80, 34.51 | 137.59 | 0.502 | 2.16 | 286.2 | 1154 | MISR | 0.21 |
+| 6 | **O10670** | **2** | 44.39, 45.08 | 140.83 | 0.506 | 4.07 | 253.9 | 1346 | CERES | 0.27 |
+| 7 | O10204 | 13 | 42.62, 43.32 | 141.52 | 0.508 | 3.36 | 257.4 | 1337 | MOPITT | 0.18 |
+| 8 | O10903 | 11 | 29.93, 30.64 | 137.65 | 0.517 | 4.72 | 287.7 | 1133 | MOPITT | 0.36 |
+| 9 | O11602 | 9 | 42.99, 43.69 | 138.93 | 0.519 | 2.53 | 262.2 | 1345 | CERES | 0.18 |
+| 10 | O11602 | 36 | −20.52, −19.84 | 124.24 | 0.519 | 6.97 | 238.0 | 1050 | CERES | 0.27 |
+| 11 | O11602 | 25 | 34.52, 35.20 | 136.54 | 0.525 | 6.62 | 258.3 | 1193 | MISR | 0.44 |
+
+**O11602 block 46 remains the answer**, by a margin of 0.094 in C₅ over the next
+genuine block — a wider gap than before, since the blocks that were closest to it
+in the 263-block ranking were the featureless ones now removed.
+
+O10670's real contributions are ranks 5 and 6, both mid-latitude Japan-sector
+scenes with adequate contrast. Its low *median* (0.659, lowest of the seven) is
+partly the Antarctic blocks dragging it down, which is a property of where that
+orbit's ASTER coverage falls rather than of the data.
+
+### Still excluded
+
+* **O10437** — 2 ASTER granules, strip too short for CERES/MOPITT to overlap it.
+  `tf_sources.py` now says so explicitly instead of raising
+  `zero-size array to reduction operation minimum`.
+* **O1117** (no ASTER) and **O12068** (MISR + MOPITT only).

@@ -135,6 +135,19 @@ m &= vmask(MR, v)
 SRC['MOPITT'] = (la[m], lo[m], v[m]); T['read_MOPITT'] = time.time() - t
 
 out = {}
+# A sensor with no points inside the ASTER strip is a real data condition, not a
+# bug: O10437 has only 2 ASTER granules, so its strip is small enough that the
+# sparse sensors (CERES ~60/block, MOPITT ~17/block) can miss it entirely. This
+# used to surface as "zero-size array to reduction operation minimum", which
+# names neither the sensor nor the cause.
+empty = [k for k, (a, b, c) in SRC.items() if a.size == 0]
+if empty:
+    raise SystemExit(
+        f"no points inside the ASTER strip for: {', '.join(empty)}.\n"
+        f"  strip lat {LA0:.2f}..{LA1:.2f}  lon {LO0:.2f}..{LO1:.2f}\n"
+        f"  This granule has {len(blocks)} ASTER block(s); a short strip can miss\n"
+        f"  the sparse sensors entirely. Nothing to assimilate -- skipping.")
+
 for k, (a, b, c) in SRC.items():
     good = np.isfinite(c)
     a = np.ascontiguousarray(a[good]); b = np.ascontiguousarray(b[good])
