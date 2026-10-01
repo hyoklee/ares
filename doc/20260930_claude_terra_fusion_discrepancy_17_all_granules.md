@@ -48,9 +48,15 @@ blocks, and one cannot be read at all.
 
 42.3 GB, valid HDF5 signature, tail reads back fine — but `netCDF4` reports
 `[Errno -101] NetCDF: HDF error` and **`h5ls` is OOM-killed (exit 137)** on a
-94 GB host. Not a truncation; something in its structure makes the library
-allocate without bound. Worth a separate look, and worth knowing before anyone
-schedules a job over the full collection.
+94 GB host.
+
+**Diagnosed in
+[the O10670 forensics note](20261001_claude_terra_fusion_O10670_corruption.md):**
+the root group's object header continuation chunk has been overwritten with
+compressed data (`H5O__chunk_deserialize: message not aligned`), and the
+superblock's EOF is stale by 229 MiB while the file's trailing provenance
+manifest is intact — the signature of a file captured mid-write. Not recoverable
+in place; it needs re-fetching.
 
 ### O10437 fails on sparse-sensor overlap
 
