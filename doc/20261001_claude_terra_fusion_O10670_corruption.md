@@ -116,7 +116,35 @@ from, for **A2001354** = 2001-12-20, matching O10670's date. So the 229 MiB
 beyond the declared EOF is **real content, correctly terminated** — the file was
 not cut short.
 
-## RESOLVED: 229 MiB duplicated by a resumed transfer
+## VERIFIED against a fresh copy fetched through CAE
+
+The granule was re-fetched from the public bucket through CAE
+([`bin/tf_o10670_s3.omni.yaml`](../bin/tf_o10670_s3.omni.yaml)) and compared in
+full. The new file is **45,133,547,913 bytes — exactly the size the corrupt
+file's own superblock declares — and it opens**, reporting 411 root objects
+where the local copy died at `H5G_mkroot`.
+
+Three SHA-256 comparisons over the whole 45 GB, with
+`PT = 30,721,900,544` and `SHIFT = 240,279,552`:
+
+| # | comparison | result |
+| --- | --- | --- |
+| 1 | `old[0 : PT]` vs `new[0 : PT]` | **identical** (`cd83f409…`) |
+| 2 | `old[PT+SHIFT : end]` vs `new[PT : end]` | **identical** (`f332ea03…`) |
+| 3 | `old[PT : PT+SHIFT]` vs `old[PT−SHIFT : PT]` | **identical** (`3119a215…`) |
+
+(1) and (2) together prove the local file is the authoritative file with a
+single contiguous run inserted and **nothing else altered** — not one byte
+outside the insertion differs. (3) proves that run is a verbatim duplicate of
+the 229.15 MiB immediately before it.
+
+**Final verdict: a resumed transfer re-sent a 229.15 MiB span instead of seeking
+past it.** The source is intact, the damage is one duplicated block, and
+everything downstream of it was merely displaced.
+
+## How it was diagnosed before the re-fetch
+
+
 
 Comparing against the authoritative S3 object by byte range settles the whole
 thing, and it is a tidier fault than the symptoms suggested.
