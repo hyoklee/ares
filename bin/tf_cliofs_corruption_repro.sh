@@ -58,7 +58,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
-python3 - "$P/data/clio_default.yaml" "$WORK/rt.yaml" "$WORK/tier/cte_disk.dat" \
+# Template config: an install prefix keeps it under data/, a build tree under
+# context-runtime/config/. CONF_TEMPLATE overrides both.
+CONF_TEMPLATE=${CONF_TEMPLATE:-}
+if [ -z "$CONF_TEMPLATE" ]; then
+  for c in "$P/data/clio_default.yaml" \
+           "$P/../context-runtime/config/clio_default.yaml" \
+           "$HOME/src/hyoklee/core/context-runtime/config/clio_default.yaml"; do
+    [ -f "$c" ] && { CONF_TEMPLATE=$c; break; }
+  done
+fi
+[ -f "$CONF_TEMPLATE" ] || { echo "!!! no clio_default.yaml found; set CONF_TEMPLATE"; exit 1; }
+echo "# config template: $CONF_TEMPLATE"
+
+python3 - "$CONF_TEMPLATE" "$WORK/rt.yaml" "$WORK/tier/cte_disk.dat" \
          "$PORT" "$RAM_TIER" "$DISK_TIER" <<'PY'
 import re, sys
 src, dst, tier, port, ram, disk = sys.argv[1:7]
@@ -71,13 +84,16 @@ s = re.sub(r'^(\s*port:)\s*9413', r'\g<1> ' + port, s, count=1, flags=re.M)
 open(dst, 'w').write(s)
 PY
 
-export LD_LIBRARY_PATH=$P/lib:$H5/lib:$MPI/lib
+# An install prefix puts libraries in lib/, a build tree in bin/. Include both,
+# and point the chimod loader at the same place.
+export LD_LIBRARY_PATH=$P/lib:$P/bin:$H5/lib:$MPI/lib
+export CLIO_REPO_PATH=${CLIO_REPO_PATH:-$([ -d "$P/lib" ] && echo "$P/lib" || echo "$P/bin")}
 export CLIO_SERVER_CONF=$WORK/rt.yaml
 export PATH=/usr/bin:/bin
 
 for p in $(pgrep -x clio_run -u "$(id -u)" 2>/dev/null); do kill -9 "$p"; done
 sleep 2
-setsid nohup "$P/bin/clio_run" start > "$WORK/rt.log" 2>&1 &
+setsid nohup "${CLIO_RUN:-$P/bin/clio_run}" start > "$WORK/rt.log" 2>&1 &
 for i in $(seq 1 120); do
   grep -q "pools created successfully" "$WORK/rt.log" 2>/dev/null && break
   sleep 1

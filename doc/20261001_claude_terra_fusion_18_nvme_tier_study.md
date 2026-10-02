@@ -109,6 +109,12 @@ any timing in this table.
 figures (+15% steady state) were also never content-verified, so they carry the
 same caveat now.
 
+> **SUPERSEDED.** On
+> [`gpu-vector-rewrite`](20261002_claude_gpu_vector_rewrite_cliofs.md) the corruption does not occur: the granule stages
+> **byte-exact**, all 19 MODIS granules are found, and clio-fs reads at
+> **10.90 s vs 10.57 s direct (+3.1%)** -- near parity, as this study's
+> decompression-bound finding predicts for any correct I/O path.
+
 ## So what IS the optimal way to use NVMe here?
 
 Not as a storage tier. In order of measured value:

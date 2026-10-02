@@ -1,0 +1,21 @@
+diff --git a/context-transfer-engine/test/integration/clio_fs_suite/cluster.py b/context-transfer-engine/test/integration/clio_fs_suite/cluster.py
+index 2a4dd07c..a13edaa7 100644
+--- a/context-transfer-engine/test/integration/clio_fs_suite/cluster.py
++++ b/context-transfer-engine/test/integration/clio_fs_suite/cluster.py
+@@ -191,6 +191,16 @@ class Cluster:
+         # would override the binaries' RUNPATH and load mismatched libs.
+         'LD_LIBRARY_PATH': self.bin_dir,
+     }
++    # fusermount3 is setuid and ships with the DISTRO libfuse3. A build linked
++    # against a different libfuse3 (e.g. a spack 3.16.2 against a distro
++    # 3.10.5) fails the mount with a misleading
++    #     fusermount3: mount failed: Operation not permitted
++    # which reads as a privilege problem and is not one. Preloading the distro
++    # library makes the handshake match. Empty value disables.
++    preload = os.environ.get('CLIO_SUITE_FUSE_PRELOAD',
++                             '/usr/lib/x86_64-linux-gnu/libfuse3.so.3')
++    if preload and os.path.exists(preload):
++      e['LD_PRELOAD'] = preload
+     # Failure detection: the runtime defaults (30 s silence + 30 s retry per
+     # send) ride out restarts but stall every op on a dead node for 30 s;
+     # a filesystem deployment wants a prompt EIO. Overridable per run.

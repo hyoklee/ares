@@ -29,6 +29,11 @@ RESULT: 5 of 10 read back with the wrong content
 # tier usage: 9.7G of 200GB
 ```
 
+> **FIXED on `gpu-vector-rewrite`.** The same test passes **50 x 1 GiB copies
+> with zero corruption** on that branch, in both RAM-tier and disk-only modes,
+> against 5 of 10 corrupt here on `dev`. See
+> [testing gpu-vector-rewrite](20261002_claude_gpu_vector_rewrite_cliofs.md). Reported on issue #1116.
+
 ## How it was found
 
 Part 18 scored clio-fs at 0.00 s for three reps. That was not a speedup: the
