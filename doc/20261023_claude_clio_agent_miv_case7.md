@@ -37,6 +37,11 @@ attempts. Only one of the problems below was in the agent itself.
   [dmosopt#129](https://github.com/dmosopt/dmosopt/issues/129) and
   [distwq#24](https://github.com/iraikov/distwq/issues/24). Neither involves
   clio-core.
+* **With `POP=8`, the run finishes and then hangs at exit until the time limit,
+  with or without clio-core.** This is a third upstream bug, in distwq's
+  collective-mode shutdown:
+  [distwq#26](https://github.com/iraikov/distwq/issues/26). A one-line fix,
+  now applied in the `miv` env, makes it exit cleanly (job 25027).
 * **The agent's `bash` tool stops each call after 300 s unless the model passes
   `timeout_ms`.** gpt-oss-120b never did, so it gave up waiting on a 30-minute
   job and marked the step "blocked".
@@ -115,12 +120,39 @@ Job 25013 (agent run 8) used the same settings as 25012 with `POP=8` and
 | job end | `CANCELLED AT 2026-10-23T16:58:09 DUE TO TIME LIMIT` (2 h); about 90 min stuck at shutdown |
 | clio runtime log | no errors; graceful shutdown only when SLURM killed the job |
 
-The optimization result is usable; the hang is at process exit. This is the
-first IOWARP=1 case 7 run that reached a normal exit path; every earlier run
-ended in `MPI_ABORT`. So it is not yet known whether the hang comes from the
-clio-core POSIX adapter (LD_PRELOAD teardown) or from MPI/distwq shutdown. The
-next step is the same POP=8 run with `IOWARP=0`; if that exits cleanly, the
-hang is in clio-core.
+The optimization result is usable; the hang is at process exit. This was the
+first IOWARP=1 case 7 run to reach a normal exit; every earlier run ended in
+`MPI_ABORT`.
+
+### The exit hang is a distwq bug, not clio-core
+
+| job | settings | result |
+| --- | --- | --- |
+| 25015 | `IOWARP=0`, POP=8, distwq 1.2.2 | the same hang; 13/13 evaluations, stats saved, no `exit=` line. Cancelled after the stacks were captured |
+| 25027 | `IOWARP=0`, POP=8, distwq 1.2.2 + one-line fix | `exit=0 walltime=1882.0 s`, 15 s after the `.h5` was last written |
+
+The gdb stacks from 25015 showed:
+
+* The 12 worker ranks were spinning at 100% CPU in `PMPI_Comm_disconnect`, in
+  `ompi_coll_base_barrier_intra_basic_linear` (mpi4py `Comm.Disconnect`).
+* The controller and 4 broker ranks were sleeping in `ompi_mpi_finalize`.
+
+On `exit`, `MPICollectiveWorker` calls `self.merged_comm.Disconnect()`
+(`distwq.py:1219` in 1.2.2), which is collective. `MPICollectiveBroker`
+forwards `exit` to its workers and then `break`s without calling it. The fix
+adds `self.merged_comm.Disconnect()` after `scatter_task("exit", ...)` in the
+broker.
+→ [iraikov/distwq#26](https://github.com/iraikov/distwq/issues/26)
+
+That fix is now applied in the `miv` env
+(`~/mc3/envs/miv/lib/python3.12/site-packages/distwq.py`; the original is saved
+next to it as `distwq.py.orig-1.2.2`). Reinstalling distwq drops it. Without
+the fix, every case 7 run that finishes normally hangs until the SLURM time
+limit.
+
+The stacks also show which transport Open MPI used: with the job script's
+`UCX_TLS=self,sm,tcp`, it picked `pml cm` with the libfabric MTL
+(`vrb_cq_readfrom`), not UCX.
 
 **The `timeout_ms` fix worked.** The agent passed `timeout_ms: 7200000` and
 waited the whole 2 h. **The agent's final report was wrong, though.** Its
