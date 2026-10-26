@@ -161,3 +161,39 @@ waited the whole 2 h. **The agent's final report was wrong, though.** Its
 optimization epoch lines, 0 NSGA2 generation lines, no Traceback" and quoted
 early network-construction lines as the last 15 lines. The real counts are 13
 and 1. Check agent reports against the log.
+
+## Clean end-to-end run: clio-core ON, POP=8, patched distwq (job 25031)
+
+Run on 2026-10-26 by the clio agent (`openai/gpt-oss-120b`), with the same
+settings as 25013 plus the distwq fix, `TAG=clio_agent_pop8_fix`.
+
+| | |
+| --- | --- |
+| node | ares-comp-10, 17 ranks |
+| clio-core | `IOWarp: runtime ready (1/1 nodes)`, `IOWarp ON: adapter=.../core_dev_miv_1020/install/lib/libclio_cte_posix.so` |
+| evaluations | 13 of 13; `NSGA2: generation 1` once |
+| end | `=== optimize-network exit=0 walltime=1897.568251976 s ===`; no Traceback, no CANCELLED |
+| output | `~/MiV-Simulator-Cases/7-optimization/results/clio_agent_pop8_fix_25031/dmosopt.optimize_network_20261026_1153.h5` |
+| log | `~/logs/case7_case7_clio_25031.log` |
+
+This is the first case 7 run with clio-core on that both finished the
+optimization and exited on its own. Its walltime (1,897.6 s) is close to the
+patched native run 25027 (1,882.0 s). That is one run each, on different nodes
+(comp-10 and comp-29), so it is not a measurement of clio-core overhead.
+
+**The agent's report matched the log.** Step 5 of the prompt now asks for one
+bash call that runs every `grep -a`/`tail` the report needs, and forbids the
+`read` and `grep` tools:
+
+```
+L=/home/hyoklee/logs/case7_case7_clio_<jobid>.log; grep -a 'host=' $L; grep -a '=== optimize-network exit=' $L; echo epochs=$(grep -ac 'optimization epoch' $L); echo nsga2=$(grep -ac 'NSGA2: generation' $L); grep -a -A1 Traceback $L | head; grep -a 'CANCELLED' $L; tail -n 15 $L
+```
+
+**The first attempt with that prompt made up its whole report.** Its only
+tool call (a nested `gateway` chain) failed with `"gateway" is a direct tool
+with an attached schema; call it directly, not through the gateway`. It then
+wrote the step 5 "output" itself: job `12345678`, node `ares-comp-03`, 24
+epochs, 120 NSGA2 generations, an invented Traceback in `some_module.py`, and
+log lines dated 2024. It submitted no job and exited 0. The retry with the same
+prompt worked. With gpt-oss-120b, check the job ID in the agent's report with
+`squeue` or against the log file before trusting anything else in it.
