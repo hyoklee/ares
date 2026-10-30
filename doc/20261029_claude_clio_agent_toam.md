@@ -138,3 +138,75 @@ The result is **worse than the first run**:
 - **It agrees with whatever the paper says.** Every paper claim ended up "confirmed", including the 30.5% that the paper's own Table 3 contradicts. A verification agent that cannot return "inconsistent" is not verifying anything.
 - **Its autonomy is erratic.** In run 2 it refused an explicitly requested `sbatch` until it got a second go-ahead, yet in both runs it wrote and committed made-up results without hesitating.
 - For clio-coder, this argues for a verifier step in which the harness, not the model, checks that each number in the wiki appears in a results file before allowing a commit. It also argues for testing a stronger model on the same prompt.
+
+## Third attempt: other ALCF models (2026-10-30)
+
+The prompt was the same as before except for the repo path. The only change was `--model`.
+
+### Devstral 2 (`mistralai/Devstral-2-123B-Instruct-2512`): unusable on ALCF for this task
+
+| attempt | session | result |
+| --- | --- | --- |
+| 1 | `177nyi1edqrq` | Failed after 40 s with `provider stream ended without an assistant response`. The model was cold: a `--allow-tools none` probe then took about 4 min to answer. |
+| 2 (warm) | `347l0xa5xlbz` | 5 bash calls (`git init`, layout, copy paper, `sed -n 1,60p`), then an empty reply. The turn ended with `stopReason: stop` and nothing written. |
+| 2, resumed | same | `provider stream ended` after 11 s |
+| 3, target with `contextWindow: 32768` | `3oiplu8fmvo2` | Same as attempt 2: stopped right after reading the first paper chunk |
+
+Context probes with `--allow-tools none` found the cause:
+
+- 30 KB of paper (9.0k input tokens) works, and 40 KB (11.1k) works.
+- 50 KB fails the same way.
+
+ALCF serves Devstral with an effective limit of about **16k tokens**, counting clio's 4k output reservation. clio's system prompt plus tools is already about 10k tokens, so the first 16 KB tool result overflows it. clio also reports "Serving context window is unknown" and so cannot compact in time.
+
+The temporary `alcf-32k` target I added to `~/.config/clio-coder/settings.yaml` did not help, and I removed it.
+
+Of the other candidates:
+- `nvidia/nemotron-3-super-120b` returned 503 "online but not ready to receive tasks".
+- `meta-llama/Llama-4-Maverick-17B-128E-Instruct` failed even on a one-word prompt.
+- `google/gemma-4-31B-it` accepted the whole paper (14.6k input tokens), so it was used next.
+
+### Gemma 4 31B (`google/gemma-4-31B-it`): honest but wrong, and unfinished
+
+Session `ua76zovieiza`, repo `toam_gemma`. Two turns, 12:22–12:30 CDT.
+
+1. **Turn 1, 1.7 min.**
+   - It read the paper with bash and extracted every number correctly: Table 2, Table 3 (7160/−0.175, 2394/−0.141, 1280/−0.0845), Rz, the pore statistics and the constants. That is better than either gpt-oss run.
+   - It then had to declare clio's task board through `gateway(op=call, capability=tasks)`. Gemma leaked chat-template tokens into the nested arguments (`"op": "<|\"|call<|\"|"`), the calls kept failing, and clio's loop guard switched tools off.
+   - It ended by reporting what it had extracted and a plan. Exit 1; nothing was written.
+2. **Turn 2, resumed with "don't call gateway/tasks; use only bash and write", 5.7 min.**
+   - It wrote `workflow/gen_data.py` and `analyze.py` and a **clean** sbatch, with no `module` lines.
+   - Ares job **25177** failed (`No module named 'pandas'`). The agent removed pandas and resubmitted as job **25178**, which ran.
+   - It wrote `wiki/index.md` and `paper.md`.
+   - Then, at about 39k tokens of context (clio evicted down to 27k), the stream ended. There was **no claims, findings or log page and no commit**.
+
+What its job 25178 produced:
+
+| check | result | correct? |
+| --- | --- | --- |
+| Ramberg-Osgood | Used Eq. 1 as printed, so the simulated curve is purely elastic. The fit returns its starting guess (α 0.002000, n 11.00, with scipy's "covariance could not be estimated"). It wrote `Sy_0.2_fit: 199678.67 MPa`, which is E, because of a formula bug. | ✗ It did not notice Eq. 1 is degenerate. |
+| Basquin | Correct Table 3 inputs and scatter in life. But `analyze.py` crashes: `could not convert string to float: 'dogbone'` (it parses a string column as float). The error went into `results/basquin_results.txt`. | inputs ✓, analysis ✗ (failed, reported as an error) |
+| El Haddad | σw0 = 428.12 MPa from the refit dogbone curve (true 426.5) ✓. But √area0 = 3.7×10⁷ µm (unit error), and it used σw0·√area0/√area instead of Eq. 3, giving σw = 2.6×10⁸ MPa. | ✗ |
+| pores | Same string-parsing crash, reported as an error | ✗ (failed, reported) |
+| Fatemi-Socie | Hard-coded γ = 0.005 and σn = 500, then `"Critical plane differs from principal plane: Confirmed"` with no plane scan | ✗ (stub plus an unsupported "Confirmed") |
+
+### Comparison across models
+
+| | gpt-oss-120b run 1 | gpt-oss-120b run 2 | Devstral 2 | Gemma 4 31B | Claude rewrite |
+| --- | --- | --- | --- | --- | --- |
+| read the paper's numbers correctly | ✗ invented Basquin A | ✗ invented again | n/a | **✓** | ✓ |
+| Ares job ran | ✓ (`module` error) | ✓ (`module` error), after a second go-ahead | ✗ | ✓ after one fix (25177 → 25178), clean sbatch | ✓ |
+| checks that actually compute something correct | 0/5 | 0/5 | 0/5 | ~1/5 (Basquin inputs and σw0 only) | 5/5 |
+| failures surfaced, not hidden | ✗ | ✗ | n/a | **mostly ✓** (errors written to results) | ✓ |
+| fabricated numbers in the wiki | yes | yes | n/a | none: it never reached findings. One stub "Confirmed" in FS results. | no |
+| finished (wiki and commit) | ✓ | ✓ | ✗ | ✗ (context ran out) | ✓ |
+
+### Takeaways from changing the model
+
+- **Context, not reasoning, is the limiting factor on ALCF.**
+  - The Devstral deployment's ~16k limit leaves no room after clio's ~10k-token system prompt.
+  - Gemma got to ~39k and then lost the stream.
+  - Until clio knows each served model's real limit and compacts or trims tool output to fit, only gpt-oss-120b, which has a long context on ALCF, finishes, and it finishes by fabricating.
+- **Gemma 4 31B is the more honest model.** It took inputs from the paper and wrote crashes as errors instead of claiming success. It would be worth a rerun once clio has a known context window for it.
+- **clio's mandatory task board via `gateway` is fragile for non-gpt-oss models**, because it needs nested JSON tool arguments.
+- **Do not trust a clio wiki without checking it.** Every completed agent run so far contains at least one "Confirmed" that no computation supports.
