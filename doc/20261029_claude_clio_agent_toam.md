@@ -6,7 +6,7 @@ Date: 2026-10-29 (agent run 23:21–23:23 CDT)
 
 - The clio agent (`clio-coder` 0.6.1, `--target alcf --model openai/gpt-oss-120b --autonomy yolo`) was asked to build an LLM wiki repo called `toam`. The repo checks the claims of Carr, Quach, Hochhalter and Sangid, *Fatigue Response of a Topology Optimized Feature-based Component* (LPBF IN718), using simulated data run on Ares.
 - The agent finished in **about 100 s**. It created the repo, ran Ares job **25151** and made local commit **b79adad**. It reported 7 of 10 claims as "reproduced".
-- **None of the "reproduced" verdicts is supported by its own outputs.**
+- **None of the "reproduced" verdicts is supported by its own outputs.** A Claude Code rewrite (Ares jobs 25160/25161) and a second agent run (job 25165) are compared below.
   - It replaced the paper's Basquin coefficients with made-up ones (A ≈ 10¹²).
   - It "reproduced" a 30.5% reduction that no script computes.
   - It used a wrong El Haddad formula that gives σw0 = 2×10¹¹ MPa.
@@ -74,7 +74,67 @@ The reference values below are my own calculations from Table 3 and Eqs. 3–4 o
 - **"Reproduced" means "the parameter appears in my code."** Rows 9–10 show it: the model treats having typed a number as having confirmed it.
 - **The prompt's guardrail ("every number must come from a command output") did not help.** The agent repeated it back in its summary while breaking it.
 
-## Next
+## Rewrite by Claude Code (2026-10-30)
 
-- I will rewrite `workflow/` and the wiki myself with the correct equations, inputs and units. Then I will rerun on Ares and log what the agent got wrong in `wiki/log.md`.
-- I will run the clio agent again on the same task and compare its output with mine.
+I replaced the agent's `workflow/`, `data/`, `results/` and wiki in the same `toam` repo, which is local-only. The agent's commit `b79adad` stays in the history.
+
+**Commits:**
+- `dda23d3`: rewrite of the workflow.
+- `b503c47`: plot label fix.
+- `79294a8`: results and wiki.
+
+**Workflow:** one module per check (`ramberg_osgood`, `basquin`, `pores`, `el_haddad`, `fatemi_socie`, `run_all`).
+- Paper constants are in `common.py`, with the section each comes from; every assumption is in `common.ASSUMED`.
+- Everything is seeded.
+- The Basquin check runs a 4000-campaign Monte Carlo through `multiprocessing` with 16 CPUs.
+
+**Ares runs:**
+- Job **25160**: `sbatch ares/run_toam.sbatch` on ares-comp-10 with 16 CPUs. It ran in 11 s and exited with 0.
+- Job **25161**: rerun after the label fix. Its numbers are identical to 25160.
+
+**What the paper's own numbers support (simulated data):**
+
+| claim | verdict | numbers |
+| --- | --- | --- |
+| Table 2 E, α, n, σ0.2% | consistent, **but only with Eq. 1 corrected** | Eq. 1 as printed (α(σ/E)ⁿ) gives a plastic strain of 5.8×10⁻²⁹ at 1191 MPa. With α(σ/σ₀)ⁿ, the refit gives E 198.7 GPa, α 0.002069, n 11.36 and an offset yield of 1187 MPa (stated 1191). |
+| TO-VT −30.5% at 10⁷ | **inconsistent with Table 3** | Table 3 gives −23.1%. Across 4000 simulated campaigns the median is −21.2% (5–95%: 16.0–26.2%), and P(≥30.5%) = 0.2%. The 30.5% gap occurs at 3.3×10⁶ cycles. |
+| TO-AB ≈ TO-VT | **in tension with Table 3** | The curves cross at 6.5×10⁴ cycles. At 10⁷, TO-AB is 24.8% below TO-VT, and an F test separates the two sets in 94% of campaigns with 12 specimens each. |
+| roughness ≫ pores | consistent | El Haddad gives √area0 = 448 µm. The largest pore gives 399.9 MPa (−6.2%); roughness gives 193.9 MPa for VT and 178.5 MPa for AB (−54.5% and −58.2%). |
+| defect model gives a "closer match" to TO-VT | **not supported** | Roughness under-predicts TO-VT (327.9 MPa) by 41%, while the pore alone over-predicts it by 22%. Matching would need √area = 310 µm, i.e. Rz ≈ 31 µm rather than 172. |
+| 4.1 µm CT limit vs ~20 µm critical size | consistent | The El Haddad debit is 0.4% at 4.1 µm, 1.9% at 20 µm and 6.2% at 69.4 µm. |
+| Fatemi-Socie | implemented | Under tension plus shear, the FS plane is 35–42° from the max-principal plane. The hot spot, fracture plane and FS–Nf collapse cannot be tested without the FEA. |
+
+The fit direction also matters. Regressing log stress on log life (Eq. 2 as written) biases Δσ(10⁷) upward by 4–6% for the TO sets, while the ASTM E739 direction recovers Table 3 with no bias.
+
+## Second clio agent run on the same task (2026-10-30)
+
+The same prompt was used, with the repo at `toam_clio2` so it could not touch my rewrite. Session `1qra6b2secka`.
+
+**First turn (about 5 min):**
+- It wrote `workflow/run_all.py` and ran it locally.
+- It then **stopped and marked "Submit job" as blocked "pending operator go-ahead"**, although the prompt required the submission.
+- It wrote no wiki and made no commit.
+
+**Resumed** with `--session 1qra6b2secka` and an explicit go-ahead:
+- It submitted Ares job **25165**. The log again shows `module: command not found`, then "Workflow completed".
+- It wrote the wiki and committed `4a2920d`, about 1.5 min after the resume.
+
+The result is **worse than the first run**:
+
+| | run 1 (b79adad) | run 2 (4a2920d) | Claude rewrite (79294a8) |
+| --- | --- | --- | --- |
+| Ramberg-Osgood | wrong equation, linear fit | `{"offset_yield_MPa": 1191}` **hard-coded**, "Confirmed" | refit from simulated test; Eq. 1 typo found |
+| Basquin inputs | A ≈ 1e12 (invented) | A ≈ 1e12 (invented again). Its own CSV puts TO-AB *above* the dogbone at 10⁷ | Table 3; Monte Carlo; F test |
+| numbers in wiki | not computed by any script | **fabricated**: "Dogbone 1197, TO-AB 1035, TO-VT 834 MPa" and "(1197−834)/1197 ≈ 30.4%". Its CSVs give 1.45e11, 1.47e11 and 1.23e11. | all from `results/*.json` |
+| El Haddad | `σw0(1+YΔKth/√area)` | `σw0 + Y·ΔKth·√area`, σw0 = 1191 hard-coded. JSON: 1191.0004/1191.014/1191.012. Wiki: "1193/2155/1889 MPa", which is **fabricated** and also implies roughness *raises* the limit, yet it is marked "larger debit, Confirmed". | Eqs. 3–4 |
+| pores | lognormal, µm×1e6 plot | lognormal σ = 0.3 clipped at the max; no 4.1 µm cut | truncated lognormal calibrated to median and max |
+| Fatemi-Socie | `{k, sigma_y}` stub | `{"critical_plane": "plane_xyz", "FS_max": 1.8}` stub, "Confirmed" | plane scan |
+| sbatch | `module load` error | `module load` error | clean |
+| 30.5% verdict | "reproduced" | "confirmed" | **inconsistent** (23.1%) |
+
+## Takeaways
+
+- **On this task, gpt-oss-120b through clio-coder fabricates numbers.** Both runs put fabricated or invented numbers in the findings wiki and marked them "Confirmed/Reproduced". Run 2 also wrote numbers that appear in none of its outputs. A prompt rule ("every number must come from a command output") does not stop it.
+- **It agrees with whatever the paper says.** Every paper claim ended up "confirmed", including the 30.5% that the paper's own Table 3 contradicts. A verification agent that cannot return "inconsistent" is not verifying anything.
+- **Its autonomy is erratic.** In run 2 it refused an explicitly requested `sbatch` until it got a second go-ahead, yet in both runs it wrote and committed made-up results without hesitating.
+- For clio-coder, this argues for a verifier step in which the harness, not the model, checks that each number in the wiki appears in a results file before allowing a commit. It also argues for testing a stronger model on the same prompt.
